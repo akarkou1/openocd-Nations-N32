@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 /***************************************************************************
- * Nations N32G03x internal Flash driver
+ *   Copyright (C) 2005 by Dominic Rath                                    *
+ *   Dominic.Rath@gmx.de                                                   *
+ *                                                                         *
+ *   Copyright (C) 2008 by Spencer Oliver                                  *
+ *   spen@spen-soft.co.uk                                                  *
+ *                                                                         *
+ *   Copyright (C) 2011 by Andreas Fritiofson                              *
+ *   andreas.fritiofson@gmail.com                                          *
  ***************************************************************************/
 
 #ifdef HAVE_CONFIG_H
@@ -9,567 +16,1762 @@
 #endif
 
 #include <string.h>
-#include <stdbool.h>
 
 #include "imp.h"
-#include <helper/log.h>
-#include <flash/nor/core.h>
+#include <helper/binarybuffer.h>
+#include <target/algorithm.h>
 #include <target/cortex_m.h>
 
-#define N32_FLASH_BASE      0x08000000U
-#define N32_DEFAULT_SIZE    (64 * 1024U)
-#define N32_DEFAULT_PAGES   128U
-#define N32_DEFAULT_PAGE_SZ (N32_DEFAULT_SIZE / N32_DEFAULT_PAGES)
+/* n32g03x register locations */
 
-/* FLASH register base (AHB + 0xA000) is 0x40022000 on N32G031 */
-#define N32_FLASH_REG_BASE  0x40022000U
+#define FLASH_REG_BASE_B0 0x40022000
+#define FLASH_REG_BASE_B1 0x40022040
 
-/* FLASH register offsets */
-#define N32_FLASH_AC_OFF    0x00U
-#define N32_FLASH_KEY_OFF   0x04U
-#define N32_FLASH_OPTKEY_OFF 0x08U
-#define N32_FLASH_STS_OFF   0x0CU
-#define N32_FLASH_CTRL_OFF  0x10U
-#define N32_FLASH_ADD_OFF   0x14U
+#define STM32_FLASH_ACR     0x00
+#define STM32_FLASH_KEYR    0x04
+#define STM32_FLASH_OPTKEYR 0x08
+#define STM32_FLASH_SR      0x0C
+#define STM32_FLASH_CR      0x10
+#define STM32_FLASH_AR      0x14
+#define STM32_FLASH_OBR     0x1C
+#define STM32_FLASH_WRPR    0x20
 
-/* FLASH control bits */
-#define FLASH_CTRL_PG       0x0001U
-#define FLASH_CTRL_PER      0x0002U
-#define FLASH_CTRL_MER      0x0004U
-#define FLASH_CTRL_OPTPG    0x0010U
-#define FLASH_CTRL_OPTER    0x0020U
-#define FLASH_CTRL_START    0x0040U
-#define FLASH_CTRL_LOCK     0x0080U
+/* TODO: Check if code using these really should be hard coded to bank 0.
+ * There are valid cases, on dual flash devices the protection of the
+ * second bank is done on the bank0 reg's. */
+#define STM32_FLASH_ACR_B0     0x40022000
+#define STM32_FLASH_KEYR_B0    0x40022004
+#define STM32_FLASH_OPTKEYR_B0 0x40022008
+#define STM32_FLASH_SR_B0      0x4002200C
+#define STM32_FLASH_CR_B0      0x40022010
+#define STM32_FLASH_AR_B0      0x40022014
+#define STM32_FLASH_OBR_B0     0x4002201C
+#define STM32_FLASH_WRPR_B0    0x40022020
 
-/* FLASH status bits */
-#define FLASH_STS_BUSY      0x01U
-#define FLASH_STS_PGERR     0x04U
-#define FLASH_STS_WRPERR    0x10U
-#define FLASH_STS_EOP       0x20U
+/* option byte location */
 
-/* FLASH keys */
-#define FLASH_KEY1          0x45670123U
-#define FLASH_KEY2          0xCDEF89ABU
+#define STM32_OB_RDP		0x1FFFF800
+#define STM32_OB_USER		0x1FFFF802
+#define STM32_OB_DATA0		0x1FFFF804
+#define STM32_OB_DATA1		0x1FFFF806
+#define STM32_OB_WRP0		0x1FFFF808
+#define STM32_OB_WRP1		0x1FFFF80A
+#define STM32_OB_WRP2		0x1FFFF80C
+#define STM32_OB_WRP3		0x1FFFF80E
 
-/* Option bytes addresses (STM32F1-style layout assumed) */
-#define N32_OB_RDP      0x1FFFF800U
-#define N32_OB_USER     0x1FFFF802U
-#define N32_OB_DATA0    0x1FFFF804U
-#define N32_OB_DATA1    0x1FFFF806U
-#define N32_OB_WRP0     0x1FFFF808U
-#define N32_OB_WRP1     0x1FFFF80AU
-#define N32_OB_WRP2     0x1FFFF80CU
-#define N32_OB_WRP3     0x1FFFF80EU
+/* FLASH_CR register bits */
 
-struct n32g03x_flash {
-    bool probed;
-    uint32_t page_size;
-    uint32_t register_base;
+#define FLASH_PG			(1 << 0)
+#define FLASH_PER			(1 << 1)
+#define FLASH_MER			(1 << 2)
+#define FLASH_OPTPG			(1 << 4)
+#define FLASH_OPTER			(1 << 5)
+#define FLASH_STRT			(1 << 6)
+#define FLASH_LOCK			(1 << 7)
+#define FLASH_OPTWRE		(1 << 9)
+#define FLASH_OBL_LAUNCH	(1 << 13)	/* except stm32f1x series */
+
+/* FLASH_SR register bits */
+
+#define FLASH_BSY		(1 << 0)
+#define FLASH_PGERR		(1 << 2)
+#define FLASH_WRPRTERR	(1 << 4)
+#define FLASH_EOP		(1 << 5)
+
+/* STM32_FLASH_OBR bit definitions (reading) */
+
+#define OPT_ERROR		0
+#define OPT_READOUT		1
+#define OPT_RDWDGSW		2
+#define OPT_RDRSTSTOP	3
+#define OPT_RDRSTSTDBY	4
+#define OPT_BFB2		5	/* dual flash bank only */
+
+/* register unlock keys */
+
+#define KEY1			0x45670123
+#define KEY2			0xCDEF89AB
+
+/* timeout values */
+
+#define FLASH_WRITE_TIMEOUT 10
+#define FLASH_ERASE_TIMEOUT 100
+
+struct n32g03x_options {
+	uint8_t rdp;
+	uint8_t user;
+	uint16_t data;
+	uint32_t protection;
 };
 
+struct n32g03x_flash_bank {
+	struct n32g03x_options option_bytes;
+	int ppage_size;
+	bool probed;
+
+	bool has_dual_banks;
+	/* used to access dual flash bank n32g03xl */
+	bool can_load_options;
+	uint32_t register_base;
+	uint8_t default_rdp;
+	int user_data_offset;
+	int option_offset;
+	uint32_t user_bank_size;
+};
+
+static int n32g03x_mass_erase(struct flash_bank *bank);
+static int n32g03x_write_block(struct flash_bank *bank, const uint8_t *buffer,
+		uint32_t address, uint32_t hwords_count);
+
+/* flash bank n32g03x <base> <size> 0 0 <target#>
+ */
 FLASH_BANK_COMMAND_HANDLER(n32g03x_flash_bank_command)
 {
-    struct n32g03x_flash *info;
-    if (CMD_ARGC < 6)
-        return ERROR_COMMAND_SYNTAX_ERROR;
-    info = calloc(1, sizeof(*info));
-    if (!info)
-        return ERROR_FAIL;
-    bank->driver_priv = info;
-    info->probed = false;
-    info->page_size = N32_DEFAULT_PAGE_SZ;
-    info->register_base = N32_FLASH_REG_BASE;
-    bank->write_start_alignment = bank->write_end_alignment = 2;
-    return ERROR_OK;
+	struct n32g03x_flash_bank *n32g03x_info;
+
+	if (CMD_ARGC < 6)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	n32g03x_info = malloc(sizeof(struct n32g03x_flash_bank));
+
+	bank->driver_priv = n32g03x_info;
+	n32g03x_info->probed = false;
+	n32g03x_info->has_dual_banks = false;
+	n32g03x_info->can_load_options = false;
+	n32g03x_info->register_base = FLASH_REG_BASE_B0;
+	n32g03x_info->user_bank_size = bank->size;
+
+	/* The flash write must be aligned to a halfword boundary */
+	bank->write_start_alignment = bank->write_end_alignment = 2;
+
+	return ERROR_OK;
 }
 
-static int n32g03x_probe(struct flash_bank *bank)
+static inline int n32g03x_get_flash_reg(struct flash_bank *bank, uint32_t reg)
 {
-    struct n32g03x_flash *info = bank->driver_priv;
-    if (!info)
-        return ERROR_FAIL;
-    if (bank->size == 0)
-        bank->size = N32_DEFAULT_SIZE;
-    uint32_t page_sz = info->page_size ? info->page_size : N32_DEFAULT_PAGE_SZ;
-    unsigned int num = bank->size / page_sz;
-    if (num == 0)
-        return ERROR_FAIL;
-    bank->num_sectors = num;
-    bank->sectors = alloc_block_array(0, bank->size, num);
-    if (!bank->sectors)
-        return ERROR_FAIL;
-    info->probed = true;
-    LOG_INFO("n32g03x: probed, size=%u, page=%u, sectors=%u", bank->size, page_sz, num);
-    return ERROR_OK;
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+	return reg + n32g03x_info->register_base;
 }
 
-static int n32g03x_auto_probe(struct flash_bank *bank)
+static inline int n32g03x_get_flash_status(struct flash_bank *bank, uint32_t *status)
 {
-    struct n32g03x_flash *info = bank->driver_priv;
-    if (!info || !info->probed)
-        return n32g03x_probe(bank);
-    return ERROR_OK;
+	struct target *target = bank->target;
+	return target_read_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_SR), status);
 }
 
-/* ---- Helper functions (pure C) ---- */
-static int n32_read32(struct target *target, uint32_t addr, uint32_t *val)
+static int n32g03x_wait_status_busy(struct flash_bank *bank, int timeout)
 {
-    return target_read_u32(target, addr, val);
+	struct target *target = bank->target;
+	uint32_t status;
+	int retval = ERROR_OK;
+
+	/* wait for busy to clear */
+	for (;;) {
+		retval = n32g03x_get_flash_status(bank, &status);
+		if (retval != ERROR_OK)
+			return retval;
+		LOG_DEBUG("status: 0x%" PRIx32 "", status);
+		if ((status & FLASH_BSY) == 0)
+			break;
+		if (timeout-- <= 0) {
+			LOG_ERROR("timed out waiting for flash");
+			return ERROR_FLASH_BUSY;
+		}
+		alive_sleep(1);
+	}
+
+	if (status & FLASH_WRPRTERR) {
+		LOG_ERROR("n32g03x device protected");
+		retval = ERROR_FLASH_PROTECTED;
+	}
+
+	if (status & FLASH_PGERR) {
+		LOG_ERROR("n32g03x device programming failed / flash not erased");
+		retval = ERROR_FLASH_OPERATION_FAILED;
+	}
+
+	/* Clear but report errors */
+	if (status & (FLASH_WRPRTERR | FLASH_PGERR)) {
+		/* If this operation fails, we ignore it and report the original
+		 * retval
+		 */
+		target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_SR),
+				FLASH_WRPRTERR | FLASH_PGERR);
+	}
+	return retval;
 }
 
-static int n32_write32(struct target *target, uint32_t addr, uint32_t val)
+static int n32g03x_check_operation_supported(struct flash_bank *bank)
 {
-    return target_write_u32(target, addr, val);
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+
+	/* if we have a dual flash bank device then
+	 * we need to perform option byte stuff on bank0 only */
+	if (n32g03x_info->register_base != FLASH_REG_BASE_B0) {
+		LOG_ERROR("Option byte operations must use bank 0");
+		return ERROR_FLASH_OPERATION_FAILED;
+	}
+
+	return ERROR_OK;
 }
 
-static int n32_clear_flags(struct target *target, uint32_t base)
+static int n32g03x_read_options(struct flash_bank *bank)
 {
-    return n32_write32(target, base + N32_FLASH_STS_OFF,
-                       (FLASH_STS_PGERR | FLASH_STS_WRPERR | FLASH_STS_EOP));
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+	struct target *target = bank->target;
+	uint32_t option_bytes;
+	int retval;
+
+	/* read user and read protection option bytes, user data option bytes */
+	retval = target_read_u32(target, STM32_FLASH_OBR_B0, &option_bytes);
+	if (retval != ERROR_OK)
+		return retval;
+
+	n32g03x_info->option_bytes.rdp = (option_bytes & (1 << OPT_READOUT)) ? 0 : n32g03x_info->default_rdp;
+	n32g03x_info->option_bytes.user = (option_bytes >> n32g03x_info->option_offset >> 2) & 0xff;
+	n32g03x_info->option_bytes.data = (option_bytes >> n32g03x_info->user_data_offset) & 0xffff;
+
+	/* read write protection option bytes */
+	retval = target_read_u32(target, STM32_FLASH_WRPR_B0, &n32g03x_info->option_bytes.protection);
+	if (retval != ERROR_OK)
+		return retval;
+
+	return ERROR_OK;
 }
 
-static int n32_read16(struct target *target, uint32_t addr, uint16_t *val)
+static int n32g03x_erase_options(struct flash_bank *bank)
 {
-    return target_read_u16(target, addr, val);
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+	struct target *target = bank->target;
+
+	/* read current options */
+	n32g03x_read_options(bank);
+
+	/* unlock flash registers */
+	int retval = target_write_u32(target, STM32_FLASH_KEYR_B0, KEY1);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = target_write_u32(target, STM32_FLASH_KEYR_B0, KEY2);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+
+	/* unlock option flash registers */
+	retval = target_write_u32(target, STM32_FLASH_OPTKEYR_B0, KEY1);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+	retval = target_write_u32(target, STM32_FLASH_OPTKEYR_B0, KEY2);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+
+	/* erase option bytes */
+	retval = target_write_u32(target, STM32_FLASH_CR_B0, FLASH_OPTER | FLASH_OPTWRE);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+	retval = target_write_u32(target, STM32_FLASH_CR_B0, FLASH_OPTER | FLASH_STRT | FLASH_OPTWRE);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+
+	retval = n32g03x_wait_status_busy(bank, FLASH_ERASE_TIMEOUT);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+
+	/* clear read protection option byte
+	 * this will also force a device unlock if set */
+	n32g03x_info->option_bytes.rdp = n32g03x_info->default_rdp;
+
+	return ERROR_OK;
+
+flash_lock:
+	target_write_u32(target, STM32_FLASH_CR_B0, FLASH_LOCK);
+	return retval;
 }
 
-static int n32_write16(struct target *target, uint32_t addr, uint16_t val)
+static int n32g03x_write_options(struct flash_bank *bank)
 {
-    return target_write_u16(target, addr, val);
-}
+	struct n32g03x_flash_bank *n32g03x_info = NULL;
+	struct target *target = bank->target;
 
-static int n32_read_opt16(struct target *target, uint32_t addr, uint16_t *val)
-{
-    return target_read_u16(target, addr, val);
-}
+	n32g03x_info = bank->driver_priv;
 
-static int n32_write_opt16(struct target *target, uint32_t addr, uint8_t byte)
-{
-    uint16_t half = (uint16_t)byte | (uint16_t)((~byte & 0xFFU) << 8);
-    return n32_write16(target, addr, half);
-}
+	/* unlock flash registers */
+	int retval = target_write_u32(target, STM32_FLASH_KEYR_B0, KEY1);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = target_write_u32(target, STM32_FLASH_KEYR_B0, KEY2);
+	if (retval != ERROR_OK)
+		goto flash_lock;
 
-static int n32_wait_ready(struct target *target, uint32_t base, uint32_t timeout)
-{
-    while (timeout--) {
-        uint32_t sts = 0;
-        if (n32_read32(target, base + N32_FLASH_STS_OFF, &sts) != ERROR_OK)
-            return ERROR_FAIL;
-        if (!(sts & FLASH_STS_BUSY)) {
-            if (sts & (FLASH_STS_PGERR | FLASH_STS_WRPERR))
-                return ERROR_FAIL;
-            return ERROR_OK;
-        }
-    }
-    return ERROR_TIMEOUT_REACHED;
-}
+	/* unlock option flash registers */
+	retval = target_write_u32(target, STM32_FLASH_OPTKEYR_B0, KEY1);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+	retval = target_write_u32(target, STM32_FLASH_OPTKEYR_B0, KEY2);
+	if (retval != ERROR_OK)
+		goto flash_lock;
 
-static int n32g03x_erase(struct flash_bank *bank, unsigned int first, unsigned int last)
-{
-    struct n32g03x_flash *info = bank->driver_priv;
-    if (!info)
-        return ERROR_FAIL;
-    if (first > last || last >= bank->num_sectors)
-        return ERROR_COMMAND_ARGUMENT_INVALID;
+	/* program option bytes */
+	retval = target_write_u32(target, STM32_FLASH_CR_B0, FLASH_OPTPG | FLASH_OPTWRE);
+	if (retval != ERROR_OK)
+		goto flash_lock;
 
-    struct target *target = bank->target;
-    uint32_t base = info->register_base;
+	uint8_t opt_bytes[16];
 
-    /* unlock */
-    if (n32_write32(target, base + N32_FLASH_KEY_OFF, FLASH_KEY1) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_write32(target, base + N32_FLASH_KEY_OFF, FLASH_KEY2) != ERROR_OK)
-        return ERROR_FAIL;
+	target_buffer_set_u16(target, opt_bytes, n32g03x_info->option_bytes.rdp);
+	target_buffer_set_u16(target, opt_bytes + 2, n32g03x_info->option_bytes.user);
+	target_buffer_set_u16(target, opt_bytes + 4, n32g03x_info->option_bytes.data & 0xff);
+	target_buffer_set_u16(target, opt_bytes + 6, (n32g03x_info->option_bytes.data >> 8) & 0xff);
+	target_buffer_set_u16(target, opt_bytes + 8, n32g03x_info->option_bytes.protection & 0xff);
+	target_buffer_set_u16(target, opt_bytes + 10, (n32g03x_info->option_bytes.protection >> 8) & 0xff);
+	target_buffer_set_u16(target, opt_bytes + 12, (n32g03x_info->option_bytes.protection >> 16) & 0xff);
+	target_buffer_set_u16(target, opt_bytes + 14, (n32g03x_info->option_bytes.protection >> 24) & 0xff);
 
-    if (first == 0 && last == bank->num_sectors - 1) {
-        if (n32_clear_flags(target, base) != ERROR_OK)
-            return ERROR_FAIL;
-        if (n32_wait_ready(target, base, 0x00200000U) != ERROR_OK)
-            return ERROR_FAIL;
-        uint32_t ctrl = 0;
-        if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-        ctrl |= FLASH_CTRL_MER;
-        if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-        ctrl |= FLASH_CTRL_START;
-        if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-        if (n32_wait_ready(target, base, 0x00400000U) != ERROR_OK)
-            return ERROR_FAIL;
-        if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-        ctrl &= ~FLASH_CTRL_MER;
-        if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-    } else {
-        for (unsigned int s = first; s <= last; ++s) {
-            uint32_t sector_addr = bank->base + bank->sectors[s].offset;
+	/* Block write is preferred in favour of operation with ancient ST-Link
+	 * firmwares without 16-bit memory access. See
+	 * 480: flash: stm32f1x: write option bytes using the loader
+	 * https://review.openocd.org/c/openocd/+/480
+	 */
+	retval = n32g03x_write_block(bank, opt_bytes, STM32_OB_RDP, sizeof(opt_bytes) / 4);
 
-            if (n32_clear_flags(target, base) != ERROR_OK)
-                return ERROR_FAIL;
-            if (n32_wait_ready(target, base, 0x00200000U) != ERROR_OK)
-                return ERROR_FAIL;
-
-            uint32_t ctrl = 0;
-            if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-                return ERROR_FAIL;
-            ctrl |= FLASH_CTRL_PER;
-            if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-                return ERROR_FAIL;
-            if (n32_write32(target, base + N32_FLASH_ADD_OFF, sector_addr) != ERROR_OK)
-                return ERROR_FAIL;
-            ctrl |= FLASH_CTRL_START;
-            if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-                return ERROR_FAIL;
-
-            if (n32_wait_ready(target, base, 0x00200000U) != ERROR_OK)
-                return ERROR_FAIL;
-
-            if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-                return ERROR_FAIL;
-            ctrl &= ~FLASH_CTRL_PER;
-            if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-                return ERROR_FAIL;
-        }
-    }
-
-    /* lock */
-    uint32_t ctrl = 0;
-    if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) == ERROR_OK) {
-        ctrl |= FLASH_CTRL_LOCK;
-        n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl);
-    }
-
-    return ERROR_OK;
-}
-
-static int n32g03x_protect(struct flash_bank *bank, int set, unsigned int first, unsigned int last)
-{
-    struct target *target = bank->target;
-    struct n32g03x_flash *info = bank->driver_priv;
-    if (!info)
-        return ERROR_FAIL;
-
-    if (target->state != TARGET_HALTED) {
-        LOG_ERROR("Target not halted");
-        return ERROR_TARGET_NOT_HALTED;
-    }
-
-    if (first > last || last >= bank->num_sectors)
-        return ERROR_COMMAND_ARGUMENT_INVALID;
-
-    /* Read current option bytes that we will preserve */
-    uint16_t rdp_hw = 0, user_hw = 0, data0_hw = 0, data1_hw = 0;
-    uint16_t wrp0_hw = 0, wrp1_hw = 0, wrp2_hw = 0, wrp3_hw = 0;
-    uint8_t wrp0 = 0xFF, wrp1 = 0xFF, wrp2 = 0xFF, wrp3 = 0xFF;
-
-    if (n32_read_opt16(target, N32_OB_RDP, &rdp_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read_opt16(target, N32_OB_USER, &user_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    (void)n32_read_opt16(target, N32_OB_DATA0, &data0_hw);
-    (void)n32_read_opt16(target, N32_OB_DATA1, &data1_hw);
-    if (n32_read_opt16(target, N32_OB_WRP0, &wrp0_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read_opt16(target, N32_OB_WRP1, &wrp1_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read_opt16(target, N32_OB_WRP2, &wrp2_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read_opt16(target, N32_OB_WRP3, &wrp3_hw) != ERROR_OK)
-        return ERROR_FAIL;
-
-    wrp0 = (uint8_t)(wrp0_hw & 0xFFU);
-    wrp1 = (uint8_t)(wrp1_hw & 0xFFU);
-    wrp2 = (uint8_t)(wrp2_hw & 0xFFU);
-    wrp3 = (uint8_t)(wrp3_hw & 0xFFU);
-
-    /* Map sectors to 32 WRP bits (coarse granularity) */
-    unsigned int prot_bits = 32U;
-    unsigned int group_size = (bank->num_sectors + prot_bits - 1U) / prot_bits; /* ceil */
-
-    for (unsigned int s = first; s <= last; ++s) {
-        unsigned int bit = s / group_size;
-        if (bit < 8U) {
-            if (set)
-                wrp0 &= ~(1U << bit);
-            else
-                wrp0 |= (1U << bit);
-        } else if (bit < 16U) {
-            unsigned int b = bit - 8U;
-            if (set)
-                wrp1 &= ~(1U << b);
-            else
-                wrp1 |= (1U << b);
-        } else if (bit < 24U) {
-            unsigned int b = bit - 16U;
-            if (set)
-                wrp2 &= ~(1U << b);
-            else
-                wrp2 |= (1U << b);
-        } else if (bit < 32U) {
-            unsigned int b = bit - 24U;
-            if (set)
-                wrp3 &= ~(1U << b);
-            else
-                wrp3 |= (1U << b);
-        }
-    }
-
-    uint32_t base = info->register_base;
-
-    /* Unlock options */
-    if (n32_write32(target, base + N32_FLASH_OPTKEY_OFF, FLASH_KEY1) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_write32(target, base + N32_FLASH_OPTKEY_OFF, FLASH_KEY2) != ERROR_OK)
-        return ERROR_FAIL;
-
-    /* Erase option bytes */
-    if (n32_clear_flags(target, base) != ERROR_OK)
-        return ERROR_FAIL;
-    uint32_t ctrl = 0;
-    if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-    ctrl |= FLASH_CTRL_OPTER;
-    if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-    ctrl |= FLASH_CTRL_START;
-    if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_wait_ready(target, base, 0x00200000U) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-    ctrl &= ~FLASH_CTRL_OPTER;
-    if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-
-    /* Program option bytes we preserved/updated */
-    if (n32_clear_flags(target, base) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-    ctrl |= FLASH_CTRL_OPTPG;
-    if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-
-    /* RDP, USER, DATA0, DATA1 unchanged */
-    if (n32_write16(target, N32_OB_RDP, rdp_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_write16(target, N32_OB_USER, user_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-        return ERROR_FAIL;
-    (void)n32_write16(target, N32_OB_DATA0, data0_hw);
-    (void)n32_wait_ready(target, base, 0x00020000U);
-    (void)n32_write16(target, N32_OB_DATA1, data1_hw);
-    (void)n32_wait_ready(target, base, 0x00020000U);
-
-    /* Updated WRP values */
-    if (n32_write_opt16(target, N32_OB_WRP0, wrp0) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_write_opt16(target, N32_OB_WRP1, wrp1) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_write_opt16(target, N32_OB_WRP2, wrp2) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_write_opt16(target, N32_OB_WRP3, wrp3) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-        return ERROR_FAIL;
-
-    /* Clear OPTPG */
-    if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-    ctrl &= ~FLASH_CTRL_OPTPG;
-    if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-        return ERROR_FAIL;
-
-    /* Lock */
-    if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) == ERROR_OK) {
-        ctrl |= FLASH_CTRL_LOCK;
-        n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl);
-    }
-
-    return ERROR_OK;
-}
-
-static int n32g03x_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t offset, uint32_t count)
-{
-    struct n32g03x_flash *info = bank->driver_priv;
-    if (!info)
-        return ERROR_FAIL;
-    if ((offset % 2) != 0 || (count % 2) != 0)
-        return ERROR_FLASH_OPER_UNSUPPORTED;
-
-    struct target *target = bank->target;
-    uint32_t base = info->register_base;
-    uint32_t addr = bank->base + offset;
-
-    /* unlock */
-    if (n32_write32(target, base + N32_FLASH_KEY_OFF, FLASH_KEY1) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_write32(target, base + N32_FLASH_KEY_OFF, FLASH_KEY2) != ERROR_OK)
-        return ERROR_FAIL;
-
-    uint32_t i = 0;
-    for (; i + 4 <= count; i += 4, addr += 4) {
-        uint32_t word = buffer[i] | (buffer[i + 1] << 8) | (buffer[i + 2] << 16) | (buffer[i + 3] << 24);
-
-        if (n32_clear_flags(target, base) != ERROR_OK)
-            return ERROR_FAIL;
-        if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-            return ERROR_FAIL;
-
-        uint32_t ctrl = 0;
-        if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-        ctrl |= FLASH_CTRL_PG;
-        if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-
-        if (n32_write32(target, addr, word) != ERROR_OK)
-            return ERROR_FAIL;
-
-        if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-            return ERROR_FAIL;
-
-        /* read-back verification */
-        uint32_t verify = 0;
-        if (n32_read32(target, addr, &verify) != ERROR_OK)
-            return ERROR_FAIL;
-        if (verify != word)
-            return ERROR_FAIL;
-
-        if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-        ctrl &= ~FLASH_CTRL_PG;
-        if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-    }
-
-    if (i + 2 == count) {
-        uint16_t half = buffer[i] | (buffer[i + 1] << 8);
-
-        if (n32_clear_flags(target, base) != ERROR_OK)
-            return ERROR_FAIL;
-        if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-            return ERROR_FAIL;
-
-        uint32_t ctrl = 0;
-        if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-        ctrl |= FLASH_CTRL_PG;
-        if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-
-        if (n32_write16(target, addr, half) != ERROR_OK)
-            return ERROR_FAIL;
-
-        if (n32_wait_ready(target, base, 0x00020000U) != ERROR_OK)
-            return ERROR_FAIL;
-
-        uint16_t v16 = 0;
-        if (n32_read16(target, addr, &v16) != ERROR_OK)
-            return ERROR_FAIL;
-        if (v16 != half)
-            return ERROR_FAIL;
-
-        if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-        ctrl &= ~FLASH_CTRL_PG;
-        if (n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl) != ERROR_OK)
-            return ERROR_FAIL;
-    }
-
-    /* lock */
-    uint32_t ctrl = 0;
-    if (n32_read32(target, base + N32_FLASH_CTRL_OFF, &ctrl) == ERROR_OK) {
-        ctrl |= FLASH_CTRL_LOCK;
-        n32_write32(target, base + N32_FLASH_CTRL_OFF, ctrl);
-    }
-
-    return ERROR_OK;
+flash_lock:
+	{
+		int retval2 = target_write_u32(target, STM32_FLASH_CR_B0, FLASH_LOCK);
+		if (retval == ERROR_OK)
+			retval = retval2;
+	}
+	return retval;
 }
 
 static int n32g03x_protect_check(struct flash_bank *bank)
 {
-    struct target *target = bank->target;
-    uint16_t wrp0_hw = 0, wrp1_hw = 0, wrp2_hw = 0, wrp3_hw = 0;
-    if (n32_read_opt16(target, N32_OB_WRP0, &wrp0_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read_opt16(target, N32_OB_WRP1, &wrp1_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read_opt16(target, N32_OB_WRP2, &wrp2_hw) != ERROR_OK)
-        return ERROR_FAIL;
-    if (n32_read_opt16(target, N32_OB_WRP3, &wrp3_hw) != ERROR_OK)
-        return ERROR_FAIL;
+	struct target *target = bank->target;
+	uint32_t protection;
 
-    uint8_t wrp0 = (uint8_t)(wrp0_hw & 0xFFU);
-    uint8_t wrp1 = (uint8_t)(wrp1_hw & 0xFFU);
-    uint8_t wrp2 = (uint8_t)(wrp2_hw & 0xFFU);
-    uint8_t wrp3 = (uint8_t)(wrp3_hw & 0xFFU);
+	int retval = n32g03x_check_operation_supported(bank);
+	if (retval != ERROR_OK)
+		return retval;
 
-    unsigned int prot_bits = 32U;
-    unsigned int group_size = (bank->num_sectors + prot_bits - 1U) / prot_bits;
+	/* medium density - each bit refers to a 4 sector protection block
+	 * high density - each bit refers to a 2 sector protection block
+	 * bit 31 refers to all remaining sectors in a bank */
+	retval = target_read_u32(target, STM32_FLASH_WRPR_B0, &protection);
+	if (retval != ERROR_OK)
+		return retval;
 
-    for (unsigned int s = 0; s < bank->num_sectors; ++s) {
-        unsigned int bit = s / group_size;
-        unsigned int p = 1U;
-        if (bit < 8U)
-            p = (wrp0 >> bit) & 1U;
-        else if (bit < 16U)
-            p = (wrp1 >> (bit - 8U)) & 1U;
-        else if (bit < 24U)
-            p = (wrp2 >> (bit - 16U)) & 1U;
-        else if (bit < 32U)
-            p = (wrp3 >> (bit - 24U)) & 1U;
-        bank->sectors[s].is_protected = (p == 0U) ? 1 : 0;
-    }
-    return ERROR_OK;
+	for (unsigned int i = 0; i < bank->num_prot_blocks; i++)
+		bank->prot_blocks[i].is_protected = (protection & (1 << i)) ? 0 : 1;
+
+	return ERROR_OK;
 }
 
-static int n32g03x_erase_check(struct flash_bank *bank)
+static int n32g03x_erase(struct flash_bank *bank, unsigned int first,
+		unsigned int last)
 {
-    return default_flash_blank_check(bank);
+	struct target *target = bank->target;
+
+	if (bank->target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	if ((first == 0) && (last == (bank->num_sectors - 1)))
+		return n32g03x_mass_erase(bank);
+
+	/* unlock flash registers */
+	int retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_KEYR), KEY1);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_KEYR), KEY2);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+
+	for (unsigned int i = first; i <= last; i++) {
+		retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_PER);
+		if (retval != ERROR_OK)
+			goto flash_lock;
+		retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_AR),
+				bank->base + bank->sectors[i].offset);
+		if (retval != ERROR_OK)
+			goto flash_lock;
+		retval = target_write_u32(target,
+				n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_PER | FLASH_STRT);
+		if (retval != ERROR_OK)
+			goto flash_lock;
+
+		retval = n32g03x_wait_status_busy(bank, FLASH_ERASE_TIMEOUT);
+		if (retval != ERROR_OK)
+			goto flash_lock;
+	}
+
+flash_lock:
+	{
+		int retval2 = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_LOCK);
+		if (retval == ERROR_OK)
+			retval = retval2;
+	}
+	return retval;
 }
 
-static int n32g03x_info(struct flash_bank *bank, struct command_invocation *cmd)
+static int n32g03x_protect(struct flash_bank *bank, int set, unsigned int first,
+		unsigned int last)
 {
-    struct n32g03x_flash *info = bank->driver_priv;
-    if (!info)
-        return ERROR_FAIL;
-    command_print_sameline(cmd, "Nations N32G03x internal flash");
-    command_print_sameline(cmd, ", size=%u bytes, page=%u bytes", bank->size,
-                           info->page_size ? info->page_size : N32_DEFAULT_PAGE_SZ);
-    return ERROR_OK;
+	struct target *target = bank->target;
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	int retval = n32g03x_check_operation_supported(bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = n32g03x_erase_options(bank);
+	if (retval != ERROR_OK) {
+		LOG_ERROR("n32g03x failed to erase options");
+		return retval;
+	}
+
+	for (unsigned int i = first; i <= last; i++) {
+		if (set)
+			n32g03x_info->option_bytes.protection &= ~(1 << i);
+		else
+			n32g03x_info->option_bytes.protection |= (1 << i);
+	}
+
+	return n32g03x_write_options(bank);
 }
 
-static void n32g03x_free_priv(struct flash_bank *bank)
+#if 1
+static int n32g03x_write_block_async(struct flash_bank *bank, const uint8_t *buffer,
+		uint32_t address, uint32_t hwords_count)
 {
-    free(bank->driver_priv);
-    bank->driver_priv = NULL;
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+	struct target *target = bank->target;
+	uint32_t buffer_size;
+	struct working_area *write_algorithm;
+	struct working_area *source;
+	struct armv7m_algorithm armv7m_info;
+	int retval;
+
+	static const uint8_t n32g03x_flash_write_code[] = {
+#include "../../../contrib/loaders/flash/n32/n32.inc"
+	};
+
+	/* flash write code */
+	if (target_alloc_working_area(target, sizeof(n32g03x_flash_write_code),
+			&write_algorithm) != ERROR_OK) {
+		LOG_WARNING("no working area available, can't do block memory writes");
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	}
+
+	retval = target_write_buffer(target, write_algorithm->address,
+			sizeof(n32g03x_flash_write_code), n32g03x_flash_write_code);
+	if (retval != ERROR_OK) {
+		target_free_working_area(target, write_algorithm);
+		return retval;
+	}
+
+	/* memory buffer */
+	buffer_size = target_get_working_area_avail(target);
+	buffer_size = MIN(hwords_count * 4 + 8, MAX(buffer_size, 256));
+	/* Normally we allocate all available working area.
+	 * MIN shrinks buffer_size if the size of the written block is smaller.
+	 * MAX prevents using async algo if the available working area is smaller
+	 * than 256, the following allocation fails with
+	 * ERROR_TARGET_RESOURCE_NOT_AVAILABLE and slow flashing takes place.
+	 */
+	LOG_INFO("target_alloc_working_area: words_count=%d, buffer_size=%d", hwords_count, buffer_size);
+	retval = target_alloc_working_area(target, buffer_size, &source);
+	/* Allocated size is always 32-bit word aligned */
+	if (retval != ERROR_OK) {
+		target_free_working_area(target, write_algorithm);
+		LOG_WARNING("no large enough working area available, can't do block memory writes");
+		/* target_alloc_working_area() may return ERROR_FAIL if area backup fails:
+		 * convert any error to ERROR_TARGET_RESOURCE_NOT_AVAILABLE
+		 */
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	}
+
+	struct reg_param reg_params[5];
+
+	init_reg_param(&reg_params[0], "r0", 32, PARAM_IN_OUT);	/* flash base (in), status (out) */
+	init_reg_param(&reg_params[1], "r1", 32, PARAM_OUT);	/* count (halfword-16bit) */
+	init_reg_param(&reg_params[2], "r2", 32, PARAM_OUT);	/* buffer start */
+	init_reg_param(&reg_params[3], "r3", 32, PARAM_OUT);	/* buffer end */
+	init_reg_param(&reg_params[4], "r4", 32, PARAM_IN_OUT);	/* target address */
+
+	buf_set_u32(reg_params[0].value, 0, 32, n32g03x_info->register_base);
+	buf_set_u32(reg_params[1].value, 0, 32, hwords_count);
+	buf_set_u32(reg_params[2].value, 0, 32, source->address);
+	buf_set_u32(reg_params[3].value, 0, 32, source->address + source->size);
+	buf_set_u32(reg_params[4].value, 0, 32, address);
+
+	armv7m_info.common_magic = ARMV7M_COMMON_MAGIC;
+	armv7m_info.core_mode = ARM_MODE_THREAD;
+
+	retval = target_run_flash_async_algorithm(target, buffer, hwords_count, 4,
+			0, NULL,
+			ARRAY_SIZE(reg_params), reg_params,
+			source->address, source->size,
+			write_algorithm->address, 0,
+			&armv7m_info);
+
+	if (retval == ERROR_FLASH_OPERATION_FAILED) {
+		/* Actually we just need to check for programming errors
+		 * n32g03x_wait_status_busy also reports error and clears status bits.
+		 *
+		 * Target algo returns flash status in r0 only if properly finished.
+		 * It is safer to re-read status register.
+		 */
+		int retval2 = n32g03x_wait_status_busy(bank, 5);
+		if (retval2 != ERROR_OK)
+			retval = retval2;
+
+		LOG_ERROR("flash write failed just before address 0x%"PRIx32,
+				buf_get_u32(reg_params[4].value, 0, 32));
+	}
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(reg_params); i++)
+		destroy_reg_param(&reg_params[i]);
+
+	target_free_working_area(target, source);
+	target_free_working_area(target, write_algorithm);
+
+	return retval;
 }
+#endif 
+
+#if 0
+static int n32g03x_write_block_riscv(struct flash_bank *bank, const uint8_t *buffer,
+		uint32_t address, uint32_t hwords_count)
+{
+	struct target *target = bank->target;
+	uint32_t buffer_size;
+	struct working_area *write_algorithm;
+	struct working_area *source;
+	static const uint8_t gd32vf103_flash_write_code[] = {
+#include "../../../contrib/loaders/flash/gd32vf103/gd32vf103.inc"
+	};
+
+	/* flash write code */
+	if (target_alloc_working_area(target, sizeof(gd32vf103_flash_write_code),
+			&write_algorithm) != ERROR_OK) {
+		LOG_WARNING("no working area available, can't do block memory writes");
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	}
+
+	int retval = target_write_buffer(target, write_algorithm->address,
+			sizeof(gd32vf103_flash_write_code), gd32vf103_flash_write_code);
+	if (retval != ERROR_OK) {
+		target_free_working_area(target, write_algorithm);
+		return retval;
+	}
+
+	/* memory buffer */
+	buffer_size = target_get_working_area_avail(target);
+	buffer_size = MIN(hwords_count * 2, MAX(buffer_size, 256));
+
+	retval = target_alloc_working_area(target, buffer_size, &source);
+	/* Allocated size is always word aligned */
+	if (retval != ERROR_OK) {
+		target_free_working_area(target, write_algorithm);
+		LOG_WARNING("no large enough working area available, can't do block memory writes");
+		/* target_alloc_working_area() may return ERROR_FAIL if area backup fails:
+		 * convert any error to ERROR_TARGET_RESOURCE_NOT_AVAILABLE
+		 */
+		return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+	}
+
+	struct reg_param reg_params[4];
+
+	init_reg_param(&reg_params[0], "a0", 32, PARAM_OUT);	/* poiner to FLASH_SR */
+	init_reg_param(&reg_params[1], "a1", 32, PARAM_OUT);	/* count (halfword-16bit) */
+	init_reg_param(&reg_params[2], "a2", 32, PARAM_OUT);	/* buffer start */
+	init_reg_param(&reg_params[3], "a3", 32, PARAM_IN_OUT);	/* target address */
+
+	while (hwords_count > 0) {
+		uint32_t thisrun_hwords = source->size / 2;
+
+		/* Limit to the amount of data we actually want to write */
+		if (thisrun_hwords > hwords_count)
+			thisrun_hwords = hwords_count;
+
+		/* Write data to buffer */
+		retval = target_write_buffer(target, source->address,
+					thisrun_hwords * 2, buffer);
+		if (retval != ERROR_OK)
+			break;
+
+		buf_set_u32(reg_params[0].value, 0, 32, n32g03x_get_flash_reg(bank, STM32_FLASH_SR));
+		buf_set_u32(reg_params[1].value, 0, 32, thisrun_hwords);
+		buf_set_u32(reg_params[2].value, 0, 32, source->address);
+		buf_set_u32(reg_params[3].value, 0, 32, address);
+
+		retval = target_run_algorithm(target,
+				0, NULL,
+				ARRAY_SIZE(reg_params), reg_params,
+				write_algorithm->address,
+				write_algorithm->address + sizeof(gd32vf103_flash_write_code) - 4,
+				10000, NULL);
+
+		if (retval != ERROR_OK) {
+			LOG_ERROR("Failed to execute algorithm at 0x%" TARGET_PRIxADDR ": %d",
+					write_algorithm->address, retval);
+			break;
+		}
+
+		/* Actually we just need to check for programming errors
+		 * n32g03x_wait_status_busy also reports error and clears status bits
+		 */
+		retval = n32g03x_wait_status_busy(bank, 5);
+		if (retval != ERROR_OK) {
+			LOG_ERROR("flash write failed at address 0x%"PRIx32,
+					buf_get_u32(reg_params[3].value, 0, 32));
+			break;
+		}
+
+		/* Update counters */
+		buffer += thisrun_hwords * 2;
+		address += thisrun_hwords * 2;
+		hwords_count -= thisrun_hwords;
+	}
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(reg_params); i++)
+		destroy_reg_param(&reg_params[i]);
+
+	target_free_working_area(target, source);
+	target_free_working_area(target, write_algorithm);
+
+	return retval;
+}
+#endif 
+
+/** Writes a block to flash either using target algorithm
+ *  or use fallback, host controlled halfword-by-halfword access.
+ *  Flash controller must be unlocked before this call.
+ */
+static int n32g03x_write_block(struct flash_bank *bank,
+		const uint8_t *buffer, uint32_t address, uint32_t words_count)
+{
+	struct target *target = bank->target;
+
+	/* The flash write must be aligned to a halfword boundary.
+	 * The flash infrastructure ensures it, do just a security check
+	 */
+	assert(address % 4 == 0);
+
+	int retval;
+	retval = n32g03x_write_block_async(bank, buffer, address, words_count);
+	if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
+		while (words_count > 0) {
+			retval = target_write_memory(target, address, 4, 1, buffer);
+			if (retval != ERROR_OK)
+				return retval;
+
+			retval = n32g03x_wait_status_busy(bank, 5);
+			if (retval != ERROR_OK)
+				return retval;
+
+			words_count--;
+			buffer += 4;
+			address += 4;
+		}
+	}
+#if 0    
+	struct arm *arm = target_to_arm(target);
+	if (is_arm(arm)) {
+		/* try using a block write - on ARM architecture or... */
+		retval = n32g03x_write_block_async(bank, buffer, address, hwords_count);
+	} else {
+		/* ... RISC-V architecture */
+		retval = n32g03x_write_block_riscv(bank, buffer, address, hwords_count);
+	}
+
+	if (retval == ERROR_TARGET_RESOURCE_NOT_AVAILABLE) {
+		/* if block write failed (no sufficient working area),
+		 * we use normal (slow) single halfword accesses */
+		LOG_WARNING("couldn't use block writes, falling back to single memory accesses");
+
+		while (hwords_count > 0) {
+			retval = target_write_memory(target, address, 2, 1, buffer);
+			if (retval != ERROR_OK)
+				return retval;
+
+			retval = n32g03x_wait_status_busy(bank, 5);
+			if (retval != ERROR_OK)
+				return retval;
+
+			hwords_count--;
+			buffer += 2;
+			address += 2;
+		}
+	}
+#endif
+
+	return retval;
+}
+
+static int n32g03x_write(struct flash_bank *bank, const uint8_t *buffer,
+		uint32_t offset, uint32_t count)
+{
+	struct target *target = bank->target;
+
+	if (bank->target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	/* The flash write must be aligned to a halfword boundary.
+	 * The flash infrastructure ensures it, do just a security check
+	 */
+	assert(offset % 2 == 0);
+	assert(count % 2 == 0);
+	LOG_INFO("n32g03x_write(bank, buffer, offset=%d, count=%d):", offset, count);
+	int retval, retval2;
+
+	/* unlock flash registers */
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_KEYR), KEY1);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_KEYR), KEY2);
+	if (retval != ERROR_OK)
+		goto reset_pg_and_lock;
+
+	/* enable flash programming */
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_PG);
+	if (retval != ERROR_OK)
+		goto reset_pg_and_lock;
+
+	
+	/* write to flash */
+	retval = n32g03x_write_block(bank, buffer, bank->base + offset, count / 4);
+
+reset_pg_and_lock:
+	retval2 = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_LOCK);
+	if (retval == ERROR_OK)
+		retval = retval2;
+
+	return retval;
+}
+
+struct n32g03x_property_addr {
+	uint32_t device_id;
+	uint32_t flash_size;
+};
+
+static int n32g03x_get_property_addr(struct target *target, struct n32g03x_property_addr *addr)
+{
+	if (!target_was_examined(target)) {
+		LOG_ERROR("Target not examined yet");
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
+	switch (cortex_m_get_partno_safe(target)) {
+	case CORTEX_M0_PARTNO: /* STM32F0x devices */
+		addr->device_id = 0x40015800;
+		addr->flash_size = 0x1FFFF7CC;
+		return ERROR_OK;
+	case CORTEX_M3_PARTNO: /* STM32F1x devices */
+		addr->device_id = 0xE0042000;
+		addr->flash_size = 0x1FFFF7E0;
+		return ERROR_OK;
+	case CORTEX_M4_PARTNO: /* STM32F3x devices */
+		addr->device_id = 0xE0042000;
+		addr->flash_size = 0x1FFFF7CC;
+		return ERROR_OK;
+	case CORTEX_M23_PARTNO: /* GD32E23x devices */
+		addr->device_id = 0x40015800;
+		addr->flash_size = 0x1FFFF7E0;
+		return ERROR_OK;
+	case CORTEX_M_PARTNO_INVALID:
+		/* Check for GD32VF103 with RISC-V CPU */
+		if (strcmp(target_type_name(target), "riscv") == 0
+				&& target_address_bits(target) == 32) {
+			/* There is nothing like arm common_magic in riscv_info_t
+			 * check text name of target and if target is 32-bit
+			 */
+			addr->device_id = 0xE0042000;
+			addr->flash_size = 0x1FFFF7E0;
+			return ERROR_OK;
+		}
+		/* fallthrough */
+	default:
+		LOG_ERROR("Cannot identify target as a n32g03x");
+		return ERROR_FAIL;
+	}
+}
+
+static int n32g03x_get_device_id(struct flash_bank *bank, uint32_t *device_id)
+{
+	struct target *target = bank->target;
+	struct n32g03x_property_addr addr;
+
+	int retval = n32g03x_get_property_addr(target, &addr);
+	if (retval != ERROR_OK)
+		return retval;
+
+	return target_read_u32(target, addr.device_id, device_id);
+}
+
+static int n32g03x_get_flash_size(struct flash_bank *bank, uint16_t *flash_size_in_kb)
+{
+	struct target *target = bank->target;
+	struct n32g03x_property_addr addr;
+
+	int retval = n32g03x_get_property_addr(target, &addr);
+	if (retval != ERROR_OK)
+		return retval;
+
+	return target_read_u16(target, addr.flash_size, flash_size_in_kb);
+}
+
+static int n32g03x_probe(struct flash_bank *bank)
+{
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+	uint16_t flash_size_in_kb;
+	uint16_t max_flash_size_in_kb;
+	uint32_t dbgmcu_idcode;
+	int page_size;
+	uint32_t base_address = 0x08000000;
+
+	n32g03x_info->probed = false;
+	n32g03x_info->register_base = FLASH_REG_BASE_B0;
+	n32g03x_info->user_data_offset = 10;
+	n32g03x_info->option_offset = 0;
+
+	/* default factory read protection level 0 */
+	n32g03x_info->default_rdp = 0xA5;
+
+
+    page_size = 512;
+    n32g03x_info->ppage_size = 128;
+    max_flash_size_in_kb = 64;
+    flash_size_in_kb = max_flash_size_in_kb;
+
+	// /* read stm32 device id register */
+	// int retval = n32g03x_get_device_id(bank, &dbgmcu_idcode);
+	// if (retval != ERROR_OK)
+	// 	return retval;
+
+	// LOG_INFO("device id = 0x%08" PRIx32 "", dbgmcu_idcode);
+
+	// uint16_t device_id = dbgmcu_idcode & 0xfff;
+	// uint16_t rev_id = dbgmcu_idcode >> 16;
+
+	// /* set page size, protection granularity and max flash size depending on family */
+	// switch (device_id) {
+	// case 0x440: /* stm32f05x */
+	// 	page_size = 1024;
+	// 	n32g03x_info->ppage_size = 4;
+	// 	max_flash_size_in_kb = 64;
+	// 	n32g03x_info->user_data_offset = 16;
+	// 	n32g03x_info->option_offset = 6;
+	// 	n32g03x_info->default_rdp = 0xAA;
+	// 	n32g03x_info->can_load_options = true;
+	// 	break;
+	// case 0x444: /* stm32f03x */
+	// case 0x445: /* stm32f04x */
+	// 	page_size = 1024;
+	// 	n32g03x_info->ppage_size = 4;
+	// 	max_flash_size_in_kb = 32;
+	// 	n32g03x_info->user_data_offset = 16;
+	// 	n32g03x_info->option_offset = 6;
+	// 	n32g03x_info->default_rdp = 0xAA;
+	// 	n32g03x_info->can_load_options = true;
+	// 	break;
+	// case 0x448: /* stm32f07x */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 4;
+	// 	max_flash_size_in_kb = 128;
+	// 	n32g03x_info->user_data_offset = 16;
+	// 	n32g03x_info->option_offset = 6;
+	// 	n32g03x_info->default_rdp = 0xAA;
+	// 	n32g03x_info->can_load_options = true;
+	// 	break;
+	// case 0x442: /* stm32f09x */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 4;
+	// 	max_flash_size_in_kb = 256;
+	// 	n32g03x_info->user_data_offset = 16;
+	// 	n32g03x_info->option_offset = 6;
+	// 	n32g03x_info->default_rdp = 0xAA;
+	// 	n32g03x_info->can_load_options = true;
+	// 	break;
+	// case 0x410: /* stm32f1x medium-density */
+	// 	page_size = 1024;
+	// 	n32g03x_info->ppage_size = 4;
+	// 	max_flash_size_in_kb = 128;
+	// 	/* GigaDevice GD32F1x0 & GD32F3x0 & GD32E23x series devices
+	// 	   share DEV_ID with STM32F101/2/3 medium-density line,
+	// 	   however they use a REV_ID different from any STM32 device.
+	// 	   The main difference is another offset of user option bits
+	// 	   (like WDG_SW, nRST_STOP, nRST_STDBY) in option byte register
+	// 	   (FLASH_OBR/FMC_OBSTAT 0x4002201C).
+	// 	   This caused problems e.g. during flash block programming
+	// 	   because of unexpected active hardware watchog. */
+	// 	switch (rev_id) {
+	// 	case 0x1303: /* gd32f1x0 */
+	// 		n32g03x_info->user_data_offset = 16;
+	// 		n32g03x_info->option_offset = 6;
+	// 		max_flash_size_in_kb = 64;
+	// 		n32g03x_info->can_load_options = true;
+	// 		break;
+	// 	case 0x1704: /* gd32f3x0 */
+	// 		n32g03x_info->user_data_offset = 16;
+	// 		n32g03x_info->option_offset = 6;
+	// 		n32g03x_info->can_load_options = true;
+	// 		break;
+	// 	case 0x1906: /* gd32vf103 */
+	// 		break;
+	// 	case 0x1909: /* gd32e23x */
+	// 		n32g03x_info->user_data_offset = 16;
+	// 		n32g03x_info->option_offset = 6;
+	// 		max_flash_size_in_kb = 64;
+	// 		n32g03x_info->can_load_options = true;
+	// 		break;
+	// 	}
+	// 	break;
+	// case 0x412: /* stm32f1x low-density */
+	// 	page_size = 1024;
+	// 	n32g03x_info->ppage_size = 4;
+	// 	max_flash_size_in_kb = 32;
+	// 	break;
+	// case 0x414: /* stm32f1x high-density */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 2;
+	// 	max_flash_size_in_kb = 512;
+	// 	break;
+	// case 0x418: /* stm32f1x connectivity */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 2;
+	// 	max_flash_size_in_kb = 256;
+	// 	break;
+	// case 0x430: /* stm32f1 XL-density (dual flash banks) */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 2;
+	// 	max_flash_size_in_kb = 1024;
+	// 	n32g03x_info->has_dual_banks = true;
+	// 	break;
+	// case 0x420: /* stm32f100xx low- and medium-density value line */
+	// 	page_size = 1024;
+	// 	n32g03x_info->ppage_size = 4;
+	// 	max_flash_size_in_kb = 128;
+	// 	break;
+	// case 0x428: /* stm32f100xx high-density value line */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 4;
+	// 	max_flash_size_in_kb = 512;
+	// 	break;
+	// case 0x422: /* stm32f302/3xb/c */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 2;
+	// 	max_flash_size_in_kb = 256;
+	// 	n32g03x_info->user_data_offset = 16;
+	// 	n32g03x_info->option_offset = 6;
+	// 	n32g03x_info->default_rdp = 0xAA;
+	// 	n32g03x_info->can_load_options = true;
+	// 	break;
+	// case 0x446: /* stm32f303xD/E */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 2;
+	// 	max_flash_size_in_kb = 512;
+	// 	n32g03x_info->user_data_offset = 16;
+	// 	n32g03x_info->option_offset = 6;
+	// 	n32g03x_info->default_rdp = 0xAA;
+	// 	n32g03x_info->can_load_options = true;
+	// 	break;
+	// case 0x432: /* stm32f37x */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 2;
+	// 	max_flash_size_in_kb = 256;
+	// 	n32g03x_info->user_data_offset = 16;
+	// 	n32g03x_info->option_offset = 6;
+	// 	n32g03x_info->default_rdp = 0xAA;
+	// 	n32g03x_info->can_load_options = true;
+	// 	break;
+	// case 0x438: /* stm32f33x */
+	// case 0x439: /* stm32f302x6/8 */
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 2;
+	// 	max_flash_size_in_kb = 64;
+	// 	n32g03x_info->user_data_offset = 16;
+	// 	n32g03x_info->option_offset = 6;
+	// 	n32g03x_info->default_rdp = 0xAA;
+	// 	n32g03x_info->can_load_options = true;
+	// 	break;
+	// case 0x511:
+	// 	page_size = 2048;
+	// 	n32g03x_info->ppage_size = 2;
+	// 	max_flash_size_in_kb = 512;	
+	// 	break;
+	// default:
+	// 	LOG_WARNING("Cannot identify target as a STM32 family.");
+	// 	return ERROR_FAIL;
+	// }
+
+	// /* get flash size from target. */
+	// retval = n32g03x_get_flash_size(bank, &flash_size_in_kb);
+
+	// /* failed reading flash size or flash size invalid (early silicon),
+	//  * default to max target family */
+	// if (retval != ERROR_OK || flash_size_in_kb == 0xffff || flash_size_in_kb == 0) {
+	// 	LOG_WARNING("STM32 flash size failed, probe inaccurate - assuming %dk flash",
+	// 		max_flash_size_in_kb);
+	// 	flash_size_in_kb = max_flash_size_in_kb;
+	// }
+
+	if (n32g03x_info->has_dual_banks) {
+		/* split reported size into matching bank */
+		if (bank->base != 0x08080000) {
+			/* bank 0 will be fixed 512k */
+			flash_size_in_kb = 512;
+		} else {
+			flash_size_in_kb -= 512;
+			/* bank1 also uses a register offset */
+			n32g03x_info->register_base = FLASH_REG_BASE_B1;
+			base_address = 0x08080000;
+		}
+	}
+
+	/* if the user sets the size manually then ignore the probed value
+	 * this allows us to work around devices that have a invalid flash size register value */
+	if (n32g03x_info->user_bank_size) {
+		LOG_INFO("ignoring flash probed value, using configured bank size");
+		flash_size_in_kb = n32g03x_info->user_bank_size / 1024;
+	}
+
+	LOG_INFO("flash size = %d KiB", flash_size_in_kb);
+
+	/* did we assign flash size? */
+	assert(flash_size_in_kb != 0xffff);
+
+	/* calculate numbers of pages */
+	int num_pages = flash_size_in_kb * 1024 / page_size;
+
+	/* check that calculation result makes sense */
+	assert(num_pages > 0);
+
+	free(bank->sectors);
+	bank->sectors = NULL;
+
+	free(bank->prot_blocks);
+	bank->prot_blocks = NULL;
+
+	bank->base = base_address;
+	bank->size = (num_pages * page_size);
+
+	bank->num_sectors = num_pages;
+	bank->sectors = alloc_block_array(0, page_size, num_pages);
+	if (!bank->sectors)
+		return ERROR_FAIL;
+
+	/* calculate number of write protection blocks */
+	int num_prot_blocks = num_pages / n32g03x_info->ppage_size;
+	if (num_prot_blocks > 32)
+		num_prot_blocks = 32;
+
+	bank->num_prot_blocks = num_prot_blocks;
+	bank->prot_blocks = alloc_block_array(0, n32g03x_info->ppage_size * page_size, num_prot_blocks);
+	if (!bank->prot_blocks)
+		return ERROR_FAIL;
+
+	if (num_prot_blocks == 32)
+		bank->prot_blocks[31].size = (num_pages - (31 * n32g03x_info->ppage_size)) * page_size;
+
+	n32g03x_info->probed = true;
+
+	return ERROR_OK;
+}
+
+static int n32g03x_auto_probe(struct flash_bank *bank)
+{
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+	if (n32g03x_info->probed)
+		return ERROR_OK;
+	return n32g03x_probe(bank);
+}
+
+#if 0
+COMMAND_HANDLER(n32g03x_handle_part_id_command)
+{
+	return ERROR_OK;
+}
+#endif
+
+static const char *get_stm32f0_revision(uint16_t rev_id)
+{
+	const char *rev_str = NULL;
+
+	switch (rev_id) {
+	case 0x1000:
+		rev_str = "1.0";
+		break;
+	case 0x2000:
+		rev_str = "2.0";
+		break;
+	}
+	return rev_str;
+}
+
+static int get_n32g03x_info(struct flash_bank *bank, struct command_invocation *cmd)
+{
+	uint32_t dbgmcu_idcode;
+
+	/* read stm32 device id register */
+	int retval = n32g03x_get_device_id(bank, &dbgmcu_idcode);
+	if (retval != ERROR_OK)
+		return retval;
+
+	uint16_t device_id = dbgmcu_idcode & 0xfff;
+	uint16_t rev_id = dbgmcu_idcode >> 16;
+	const char *device_str;
+	const char *rev_str = NULL;
+
+	switch (device_id) {
+	case 0x410:
+		device_str = "STM32F10x (Medium Density)";
+
+		switch (rev_id) {
+		case 0x0000:
+			rev_str = "A";
+			break;
+
+		case 0x1303: /* gd32f1x0 */
+			device_str = "GD32F1x0";
+			break;
+
+		case 0x1704: /* gd32f3x0 */
+			device_str = "GD32F3x0";
+			break;
+
+		case 0x1906:
+			device_str = "GD32VF103";
+			break;
+
+		case 0x1909: /* gd32e23x */
+			device_str = "GD32E23x";
+			break;
+
+		case 0x2000:
+			rev_str = "B";
+			break;
+
+		case 0x2001:
+			rev_str = "Z";
+			break;
+
+		case 0x2003:
+			rev_str = "Y";
+			break;
+		}
+		break;
+
+	case 0x412:
+		device_str = "STM32F10x (Low Density)";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+		}
+		break;
+
+	case 0x414:
+		device_str = "STM32F10x (High Density)";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+
+		case 0x1001:
+			rev_str = "Z";
+			break;
+
+		case 0x1003:
+			rev_str = "Y";
+			break;
+		}
+		break;
+
+	case 0x418:
+		device_str = "STM32F10x (Connectivity)";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+
+		case 0x1001:
+			rev_str = "Z";
+			break;
+		}
+		break;
+
+	case 0x420:
+		device_str = "STM32F100 (Low/Medium Density)";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+
+		case 0x1001:
+			rev_str = "Z";
+			break;
+		}
+		break;
+
+	case 0x422:
+		device_str = "STM32F302xB/C";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+
+		case 0x1001:
+			rev_str = "Z";
+			break;
+
+		case 0x1003:
+			rev_str = "Y";
+			break;
+
+		case 0x2000:
+			rev_str = "B";
+			break;
+		}
+		break;
+
+	case 0x428:
+		device_str = "STM32F100 (High Density)";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+
+		case 0x1001:
+			rev_str = "Z";
+			break;
+		}
+		break;
+
+	case 0x430:
+		device_str = "STM32F10x (XL Density)";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+		}
+		break;
+
+	case 0x432:
+		device_str = "STM32F37x";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+
+		case 0x2000:
+			rev_str = "B";
+			break;
+		}
+		break;
+
+	case 0x438:
+		device_str = "STM32F33x";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+		}
+		break;
+
+	case 0x439:
+		device_str = "STM32F302x6/8";
+
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+
+		case 0x1001:
+			rev_str = "Z";
+			break;
+		}
+		break;
+
+	case 0x444:
+		device_str = "STM32F03x";
+		rev_str = get_stm32f0_revision(rev_id);
+		break;
+
+	case 0x440:
+		device_str = "STM32F05x";
+		rev_str = get_stm32f0_revision(rev_id);
+		break;
+
+	case 0x445:
+		device_str = "STM32F04x";
+		rev_str = get_stm32f0_revision(rev_id);
+		break;
+
+	case 0x446:
+		device_str = "STM32F303xD/E";
+		switch (rev_id) {
+		case 0x1000:
+			rev_str = "A";
+			break;
+		}
+		break;
+
+	case 0x448:
+		device_str = "STM32F07x";
+		rev_str = get_stm32f0_revision(rev_id);
+		break;
+
+	case 0x442:
+		device_str = "STM32F09x";
+		rev_str = get_stm32f0_revision(rev_id);
+		break;
+
+	default:
+		command_print_sameline(cmd, "Cannot identify target as a STM32F0/1/3\n");
+		return ERROR_FAIL;
+	}
+
+	if (rev_str)
+		command_print_sameline(cmd, "%s - Rev: %s", device_str, rev_str);
+	else
+		command_print_sameline(cmd, "%s - Rev: unknown (0x%04x)", device_str, rev_id);
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(n32g03x_handle_lock_command)
+{
+	struct target *target = NULL;
+	struct n32g03x_flash_bank *n32g03x_info = NULL;
+
+	if (CMD_ARGC < 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct flash_bank *bank;
+	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	n32g03x_info = bank->driver_priv;
+
+	target = bank->target;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	retval = n32g03x_check_operation_supported(bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	if (n32g03x_erase_options(bank) != ERROR_OK) {
+		command_print(CMD, "n32g03x failed to erase options");
+		return ERROR_OK;
+	}
+
+	/* set readout protection */
+	n32g03x_info->option_bytes.rdp = 0;
+
+	if (n32g03x_write_options(bank) != ERROR_OK) {
+		command_print(CMD, "n32g03x failed to lock device");
+		return ERROR_OK;
+	}
+
+	command_print(CMD, "n32g03x locked");
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(n32g03x_handle_unlock_command)
+{
+	struct target *target = NULL;
+
+	if (CMD_ARGC < 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct flash_bank *bank;
+	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	target = bank->target;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	retval = n32g03x_check_operation_supported(bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	if (n32g03x_erase_options(bank) != ERROR_OK) {
+		command_print(CMD, "n32g03x failed to erase options");
+		return ERROR_OK;
+	}
+
+	if (n32g03x_write_options(bank) != ERROR_OK) {
+		command_print(CMD, "n32g03x failed to unlock device");
+		return ERROR_OK;
+	}
+
+	command_print(CMD, "n32g03x unlocked.\n"
+			"INFO: a reset or power cycle is required "
+			"for the new settings to take effect.");
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(n32g03x_handle_options_read_command)
+{
+	uint32_t optionbyte, protection;
+	struct target *target = NULL;
+	struct n32g03x_flash_bank *n32g03x_info = NULL;
+
+	if (CMD_ARGC < 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct flash_bank *bank;
+	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	n32g03x_info = bank->driver_priv;
+
+	target = bank->target;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	retval = n32g03x_check_operation_supported(bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = target_read_u32(target, STM32_FLASH_OBR_B0, &optionbyte);
+	if (retval != ERROR_OK)
+		return retval;
+
+	uint16_t user_data = optionbyte >> n32g03x_info->user_data_offset;
+
+	retval = target_read_u32(target, STM32_FLASH_WRPR_B0, &protection);
+	if (retval != ERROR_OK)
+		return retval;
+
+	if (optionbyte & (1 << OPT_ERROR))
+		command_print(CMD, "option byte complement error");
+
+	command_print(CMD, "option byte register = 0x%" PRIx32 "", optionbyte);
+	command_print(CMD, "write protection register = 0x%" PRIx32 "", protection);
+
+	command_print(CMD, "read protection: %s",
+				(optionbyte & (1 << OPT_READOUT)) ? "on" : "off");
+
+	/* user option bytes are offset depending on variant */
+	optionbyte >>= n32g03x_info->option_offset;
+
+	command_print(CMD, "watchdog: %sware",
+				(optionbyte & (1 << OPT_RDWDGSW)) ? "soft" : "hard");
+
+	command_print(CMD, "stop mode: %sreset generated upon entry",
+				(optionbyte & (1 << OPT_RDRSTSTOP)) ? "no " : "");
+
+	command_print(CMD, "standby mode: %sreset generated upon entry",
+				(optionbyte & (1 << OPT_RDRSTSTDBY)) ? "no " : "");
+
+	if (n32g03x_info->has_dual_banks)
+		command_print(CMD, "boot: bank %d", (optionbyte & (1 << OPT_BFB2)) ? 0 : 1);
+
+	command_print(CMD, "user data = 0x%02" PRIx16 "", user_data);
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(n32g03x_handle_options_write_command)
+{
+	struct target *target = NULL;
+	struct n32g03x_flash_bank *n32g03x_info = NULL;
+	uint8_t optionbyte;
+	uint16_t useropt;
+
+	if (CMD_ARGC < 2)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct flash_bank *bank;
+	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	n32g03x_info = bank->driver_priv;
+
+	target = bank->target;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	retval = n32g03x_check_operation_supported(bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = n32g03x_read_options(bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	/* start with current options */
+	optionbyte = n32g03x_info->option_bytes.user;
+	useropt = n32g03x_info->option_bytes.data;
+
+	/* skip over flash bank */
+	CMD_ARGC--;
+	CMD_ARGV++;
+
+	while (CMD_ARGC) {
+		if (strcmp("SWWDG", CMD_ARGV[0]) == 0)
+			optionbyte |= (1 << 0);
+		else if (strcmp("HWWDG", CMD_ARGV[0]) == 0)
+			optionbyte &= ~(1 << 0);
+		else if (strcmp("NORSTSTOP", CMD_ARGV[0]) == 0)
+			optionbyte |= (1 << 1);
+		else if (strcmp("RSTSTOP", CMD_ARGV[0]) == 0)
+			optionbyte &= ~(1 << 1);
+		else if (strcmp("NORSTSTNDBY", CMD_ARGV[0]) == 0)
+			optionbyte |= (1 << 2);
+		else if (strcmp("RSTSTNDBY", CMD_ARGV[0]) == 0)
+			optionbyte &= ~(1 << 2);
+		else if (strcmp("USEROPT", CMD_ARGV[0]) == 0) {
+			if (CMD_ARGC < 2)
+				return ERROR_COMMAND_SYNTAX_ERROR;
+			COMMAND_PARSE_NUMBER(u16, CMD_ARGV[1], useropt);
+			CMD_ARGC--;
+			CMD_ARGV++;
+		} else if (n32g03x_info->has_dual_banks) {
+			if (strcmp("BOOT0", CMD_ARGV[0]) == 0)
+				optionbyte |= (1 << 3);
+			else if (strcmp("BOOT1", CMD_ARGV[0]) == 0)
+				optionbyte &= ~(1 << 3);
+			else
+				return ERROR_COMMAND_SYNTAX_ERROR;
+		} else
+			return ERROR_COMMAND_SYNTAX_ERROR;
+		CMD_ARGC--;
+		CMD_ARGV++;
+	}
+
+	if (n32g03x_erase_options(bank) != ERROR_OK) {
+		command_print(CMD, "n32g03x failed to erase options");
+		return ERROR_OK;
+	}
+
+	n32g03x_info->option_bytes.user = optionbyte;
+	n32g03x_info->option_bytes.data = useropt;
+
+	if (n32g03x_write_options(bank) != ERROR_OK) {
+		command_print(CMD, "n32g03x failed to write options");
+		return ERROR_OK;
+	}
+
+	command_print(CMD, "n32g03x write options complete.\n"
+				"INFO: %spower cycle is required "
+				"for the new settings to take effect.",
+				n32g03x_info->can_load_options
+					? "'stm32f1x options_load' command or " : "");
+
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(n32g03x_handle_options_load_command)
+{
+	if (CMD_ARGC < 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct flash_bank *bank;
+	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	struct n32g03x_flash_bank *n32g03x_info = bank->driver_priv;
+
+	if (!n32g03x_info->can_load_options) {
+		LOG_ERROR("Command not applicable to stm32f1x devices - power cycle is "
+			"required instead.");
+		return ERROR_FAIL;
+	}
+
+	struct target *target = bank->target;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	retval = n32g03x_check_operation_supported(bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	/* unlock option flash registers */
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_KEYR), KEY1);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_KEYR), KEY2);
+	if (retval != ERROR_OK) {
+		(void)target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_LOCK);
+		return retval;
+	}
+
+	/* force re-load of option bytes - generates software reset */
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_OBL_LAUNCH);
+	if (retval != ERROR_OK)
+		return retval;
+
+	return ERROR_OK;
+}
+
+static int n32g03x_mass_erase(struct flash_bank *bank)
+{
+	struct target *target = bank->target;
+
+	if (target->state != TARGET_HALTED) {
+		LOG_ERROR("Target not halted");
+		return ERROR_TARGET_NOT_HALTED;
+	}
+
+	/* unlock option flash registers */
+	int retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_KEYR), KEY1);
+	if (retval != ERROR_OK)
+		return retval;
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_KEYR), KEY2);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+
+	/* mass erase flash memory */
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_MER);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+	retval = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR),
+			FLASH_MER | FLASH_STRT);
+	if (retval != ERROR_OK)
+		goto flash_lock;
+
+	retval = n32g03x_wait_status_busy(bank, FLASH_ERASE_TIMEOUT);
+
+flash_lock:
+	{
+		int retval2 = target_write_u32(target, n32g03x_get_flash_reg(bank, STM32_FLASH_CR), FLASH_LOCK);
+		if (retval == ERROR_OK)
+			retval = retval2;
+	}
+	return retval;
+}
+
+COMMAND_HANDLER(n32g03x_handle_mass_erase_command)
+{
+	if (CMD_ARGC < 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct flash_bank *bank;
+	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = n32g03x_mass_erase(bank);
+	if (retval == ERROR_OK)
+		command_print(CMD, "n32g03x mass erase complete");
+	else
+		command_print(CMD, "n32g03x mass erase failed");
+
+	return retval;
+}
+
+static const struct command_registration n32g03x_exec_command_handlers[] = {
+	{
+		.name = "lock",
+		.handler = n32g03x_handle_lock_command,
+		.mode = COMMAND_EXEC,
+		.usage = "bank_id",
+		.help = "Lock entire flash device.",
+	},
+	{
+		.name = "unlock",
+		.handler = n32g03x_handle_unlock_command,
+		.mode = COMMAND_EXEC,
+		.usage = "bank_id",
+		.help = "Unlock entire protected flash device.",
+	},
+	{
+		.name = "mass_erase",
+		.handler = n32g03x_handle_mass_erase_command,
+		.mode = COMMAND_EXEC,
+		.usage = "bank_id",
+		.help = "Erase entire flash device.",
+	},
+	{
+		.name = "options_read",
+		.handler = n32g03x_handle_options_read_command,
+		.mode = COMMAND_EXEC,
+		.usage = "bank_id",
+		.help = "Read and display device option bytes.",
+	},
+	{
+		.name = "options_write",
+		.handler = n32g03x_handle_options_write_command,
+		.mode = COMMAND_EXEC,
+		.usage = "bank_id ('SWWDG'|'HWWDG') "
+			"('RSTSTNDBY'|'NORSTSTNDBY') "
+			"('RSTSTOP'|'NORSTSTOP') ('USEROPT' user_data)",
+		.help = "Replace bits in device option bytes.",
+	},
+	{
+		.name = "options_load",
+		.handler = n32g03x_handle_options_load_command,
+		.mode = COMMAND_EXEC,
+		.usage = "bank_id",
+		.help = "Force re-load of device option bytes.",
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
+static const struct command_registration n32g03x_command_handlers[] = {
+	{
+		.name = "n32g03x",
+		.mode = COMMAND_ANY,
+		.help = "n32g03x flash command group",
+		.usage = "",
+		.chain = n32g03x_exec_command_handlers,
+	},
+	COMMAND_REGISTRATION_DONE
+};
 
 const struct flash_driver n32g03x_flash = {
-    .name = "n32g03x",
-    .commands = NULL,
-    .flash_bank_command = n32g03x_flash_bank_command,
-    .erase = n32g03x_erase,
-    .protect = n32g03x_protect,
-    .write = n32g03x_write,
-    .read = default_flash_read,
-    .probe = n32g03x_probe,
-    .auto_probe = n32g03x_auto_probe,
-    .erase_check = n32g03x_erase_check,
-    .protect_check = n32g03x_protect_check,
-    .info = n32g03x_info,
-    .free_driver_priv = n32g03x_free_priv,
+	.name = "n32g03x",
+	.commands = n32g03x_command_handlers,
+	.flash_bank_command = n32g03x_flash_bank_command,
+	.erase = n32g03x_erase,
+	.protect = n32g03x_protect,
+	.write = n32g03x_write,
+	.read = default_flash_read,
+	.probe = n32g03x_probe,
+	.auto_probe = n32g03x_auto_probe,
+	.erase_check = default_flash_blank_check,
+	.protect_check = n32g03x_protect_check,
+	.info = get_n32g03x_info,
+	.free_driver_priv = default_flash_free_driver_priv,
 };
