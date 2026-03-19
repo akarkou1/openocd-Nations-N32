@@ -97,16 +97,20 @@
 
 #define DP_DLPIDR_PROTVSN	1u
 
-#define DP_SELECT_APSEL 0xFF000000
-#define DP_SELECT_APBANK 0x000000F0
-#define DP_SELECT_DPBANK 0x0000000F
-#define DP_SELECT_INVALID 0x00FFFF00 /* Reserved bits one */
+#define ADIV5_DP_SELECT_APSEL	0xFF000000
+#define ADIV5_DP_SELECT_APBANK	0x000000F0
+#define DP_SELECT_DPBANK		0x0000000F
+/*
+ * Mask of AP ADDR in select cache, concatenating DP SELECT and DP_SELECT1.
+ * In case of ADIv5, the mask contains both APSEL and APBANKSEL fields.
+ */
+#define SELECT_AP_MASK			(~(uint64_t)DP_SELECT_DPBANK)
 
-#define DP_APSEL_MAX        (255) /* for ADIv5 only */
-#define DP_APSEL_INVALID    0xF00 /* more than DP_APSEL_MAX and not ADIv6 aligned 4k */
+#define DP_APSEL_MAX			(255) /* Strict limit for ADIv5, number of AP buffers for ADIv6 */
+#define DP_APSEL_INVALID		0xF00 /* more than DP_APSEL_MAX and not ADIv6 aligned 4k */
 
-#define DP_TARGETSEL_INVALID 0xFFFFFFFFU
-#define DP_TARGETSEL_DPID_MASK 0x0FFFFFFFU
+#define DP_TARGETSEL_INVALID	0xFFFFFFFFU
+#define DP_TARGETSEL_DPID_MASK	0x0FFFFFFFU
 #define DP_TARGETSEL_INSTANCEID_MASK 0xF0000000U
 #define DP_TARGETSEL_INSTANCEID_SHIFT 28
 
@@ -161,6 +165,9 @@
 #define CSW_8BIT		0
 #define CSW_16BIT		1
 #define CSW_32BIT		2
+#define CSW_64BIT		3
+#define CSW_128BIT		4
+#define CSW_256BIT		5
 #define CSW_ADDRINC_MASK    (3UL << 4)
 #define CSW_ADDRINC_OFF     0UL
 #define CSW_ADDRINC_SINGLE  (1UL << 4)
@@ -266,6 +273,26 @@ struct adiv5_ap {
 	uint32_t csw_value;
 
 	/**
+	 * Save the supported CSW.Size data types for the MEM-AP.
+	 * Each bit corresponds to a data type.
+	 * 0b1 = Supported data size. 0b0 = Not supported.
+	 * Bit 0 = Byte (8-bits)
+	 * Bit 1 = Halfword (16-bits)
+	 * Bit 2 = Word (32-bits) - always supported by spec.
+	 * Bit 3 = Doubleword (64-bits)
+	 * Bit 4 = 128-bits
+	 * Bit 5 = 256-bits
+	 */
+	uint32_t csw_size_supported_mask;
+	/**
+	 * Probed CSW.Size data types for the MEM-AP.
+	 * Each bit corresponds to a data type.
+	 * 0b1 = Data size has been probed. 0b0 = Not yet probed.
+	 * Bits assigned to sizes same way as above.
+	 */
+	uint32_t csw_size_probed_mask;
+
+	/**
 	 * Cache for (MEM-AP) AP_REG_TAR register value This is written to
 	 * configure the address being read or written
 	 * "-1" indicates no cached value.
@@ -282,7 +309,8 @@ struct adiv5_ap {
 	uint32_t tar_autoincr_block;
 
 	/* true if packed transfers are supported by the MEM-AP */
-	bool packed_transfers;
+	bool packed_transfers_supported;
+	bool packed_transfers_probed;
 
 	/* true if unaligned memory access is not supported by the MEM-AP */
 	bool unaligned_access_bad;
@@ -338,11 +366,21 @@ struct adiv5_dap {
 	/* The current manually selected AP by the "dap apsel" command */
 	uint64_t apsel;
 
-	/**
-	 * Cache for DP_SELECT register. A value of DP_SELECT_INVALID
-	 * indicates no cached value and forces rewrite of the register.
-	 */
+	/** Cache for DP SELECT and SELECT1 (ADIv6) register. */
 	uint64_t select;
+	/** Validity of DP SELECT cache. false will force register rewrite */
+	bool select_valid;
+	bool select1_valid;	/* ADIv6 only */
+	/**
+	 * Partial DPBANKSEL validity for SWD only.
+	 * ADIv6 line reset sets DP SELECT DPBANKSEL to zero,
+	 * ADIv5 does not.
+	 * We can rely on it for the banked DP register 0 also on ADIv5
+	 * as ADIv5 has no mapping for DP reg 0 - it is always DPIDR.
+	 * It is important to avoid setting DP SELECT in connection
+	 * reset state before reading DPIDR.
+	 */
+	bool select_dpbanksel_valid;
 
 	/* information about current pending SWjDP-AHBAP transaction */
 	uint8_t  ack;
@@ -406,6 +444,9 @@ struct adiv5_dap {
  * available until run().
  */
 struct dap_ops {
+	/** Optional; called once on the first enabled dap before connecting */
+	int (*pre_connect_init)(struct adiv5_dap *dap);
+
 	/** connect operation for SWD */
 	int (*connect)(struct adiv5_dap *dap);
 
@@ -413,17 +454,17 @@ struct dap_ops {
 	int (*send_sequence)(struct adiv5_dap *dap, enum swd_special_seq seq);
 
 	/** DP register read. */
-	int (*queue_dp_read)(struct adiv5_dap *dap, unsigned reg,
+	int (*queue_dp_read)(struct adiv5_dap *dap, unsigned int reg,
 			uint32_t *data);
 	/** DP register write. */
-	int (*queue_dp_write)(struct adiv5_dap *dap, unsigned reg,
+	int (*queue_dp_write)(struct adiv5_dap *dap, unsigned int reg,
 			uint32_t data);
 
 	/** AP register read. */
-	int (*queue_ap_read)(struct adiv5_ap *ap, unsigned reg,
+	int (*queue_ap_read)(struct adiv5_ap *ap, unsigned int reg,
 			uint32_t *data);
 	/** AP register write. */
-	int (*queue_ap_write)(struct adiv5_ap *ap, unsigned reg,
+	int (*queue_ap_write)(struct adiv5_ap *ap, unsigned int reg,
 			uint32_t data);
 
 	/** AP operation abort. */
@@ -454,6 +495,9 @@ enum ap_type {
 	AP_TYPE_AXI5_AP  = AP_REG_IDR_VALUE(ARM_ID, AP_REG_IDR_CLASS_MEM_AP, 7),  /* AXI5 Memory-AP */
 	AP_TYPE_AHB5H_AP = AP_REG_IDR_VALUE(ARM_ID, AP_REG_IDR_CLASS_MEM_AP, 8),  /* AHB5 with enhanced HPROT Memory-AP */
 };
+
+extern const struct dap_ops jtag_dp_ops;
+extern const struct dap_ops swd_dap_ops;
 
 /* Check the ap->cfg_reg Long Address field (bit 1)
  *
@@ -509,7 +553,7 @@ static inline int dap_send_sequence(struct adiv5_dap *dap,
  * @return ERROR_OK for success, else a fault code.
  */
 static inline int dap_queue_dp_read(struct adiv5_dap *dap,
-		unsigned reg, uint32_t *data)
+		unsigned int reg, uint32_t *data)
 {
 	assert(dap->ops);
 	return dap->ops->queue_dp_read(dap, reg, data);
@@ -527,7 +571,7 @@ static inline int dap_queue_dp_read(struct adiv5_dap *dap,
  * @return ERROR_OK for success, else a fault code.
  */
 static inline int dap_queue_dp_write(struct adiv5_dap *dap,
-		unsigned reg, uint32_t data)
+		unsigned int reg, uint32_t data)
 {
 	assert(dap->ops);
 	return dap->ops->queue_dp_write(dap, reg, data);
@@ -544,7 +588,7 @@ static inline int dap_queue_dp_write(struct adiv5_dap *dap,
  * @return ERROR_OK for success, else a fault code.
  */
 static inline int dap_queue_ap_read(struct adiv5_ap *ap,
-		unsigned reg, uint32_t *data)
+		unsigned int reg, uint32_t *data)
 {
 	assert(ap->dap->ops);
 	if (ap->refcount == 0) {
@@ -564,7 +608,7 @@ static inline int dap_queue_ap_read(struct adiv5_ap *ap,
  * @return ERROR_OK for success, else a fault code.
  */
 static inline int dap_queue_ap_write(struct adiv5_ap *ap,
-		unsigned reg, uint32_t data)
+		unsigned int reg, uint32_t data)
 {
 	assert(ap->dap->ops);
 	if (ap->refcount == 0) {
@@ -615,7 +659,7 @@ static inline int dap_sync(struct adiv5_dap *dap)
 	return ERROR_OK;
 }
 
-static inline int dap_dp_read_atomic(struct adiv5_dap *dap, unsigned reg,
+static inline int dap_dp_read_atomic(struct adiv5_dap *dap, unsigned int reg,
 				     uint32_t *value)
 {
 	int retval;
@@ -627,7 +671,7 @@ static inline int dap_dp_read_atomic(struct adiv5_dap *dap, unsigned reg,
 	return dap_run(dap);
 }
 
-static inline int dap_dp_poll_register(struct adiv5_dap *dap, unsigned reg,
+static inline int dap_dp_poll_register(struct adiv5_dap *dap, unsigned int reg,
 				       uint32_t mask, uint32_t value, int timeout)
 {
 	assert(timeout > 0);
@@ -694,10 +738,21 @@ int adiv6_dap_read_baseptr(struct command_invocation *cmd, struct adiv5_dap *dap
 /* test if ap_num is valid, based on current knowledge of dap */
 bool is_ap_num_valid(struct adiv5_dap *dap, uint64_t ap_num);
 
-/* Probe Access Ports to find a particular type. Increment AP refcount */
-int dap_find_get_ap(struct adiv5_dap *dap,
-			enum ap_type type_to_find,
+/* Probe Access Ports to find any type from array.
+ * Increment AP refcount */
+int dap_find_by_types_get_ap(struct adiv5_dap *dap,
+			const enum ap_type *types_to_find,
+			unsigned int num_types,
 			struct adiv5_ap **ap_out);
+
+/* Probe Access Ports to find a particular type. Increment AP refcount */
+static inline int dap_find_get_ap(struct adiv5_dap *dap,
+			enum ap_type type_to_find,
+			struct adiv5_ap **ap_out)
+{
+	const enum ap_type types[1] = { type_to_find };
+	return dap_find_by_types_get_ap(dap, types, 1, ap_out);
+}
 
 /* Return AP with specified ap_num. Increment AP refcount */
 struct adiv5_ap *dap_get_ap(struct adiv5_dap *dap, uint64_t ap_num);
@@ -744,6 +799,15 @@ struct adiv5_private_config {
 };
 
 extern int adiv5_verify_config(struct adiv5_private_config *pc);
+
+enum adiv5_configure_dap_optional {
+	ADI_CONFIGURE_DAP_COMPULSORY = false,
+	ADI_CONFIGURE_DAP_OPTIONAL = true
+};
+
+extern int adiv5_jim_configure_ext(struct target *target, struct jim_getopt_info *goi,
+								   struct adiv5_private_config *pc,
+								   enum adiv5_configure_dap_optional optional);
 extern int adiv5_jim_configure(struct target *target, struct jim_getopt_info *goi);
 
 struct adiv5_mem_ap_spot {

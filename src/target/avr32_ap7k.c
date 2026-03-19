@@ -117,7 +117,7 @@ static int avr32_write_core_reg(struct target *target, int num)
 
 	reg_value = buf_get_u32(ap7k->core_cache->reg_list[num].value, 0, 32);
 	ap7k->core_regs[num] = reg_value;
-	LOG_DEBUG("write core reg %i value 0x%" PRIx32 "", num, reg_value);
+	LOG_DEBUG("write core reg %i value 0x%" PRIx32, num, reg_value);
 	ap7k->core_cache->reg_list[num].valid = true;
 	ap7k->core_cache->reg_list[num].dirty = false;
 
@@ -300,8 +300,8 @@ static int avr32_ap7k_deassert_reset(struct target *target)
 	return ERROR_OK;
 }
 
-static int avr32_ap7k_resume(struct target *target, int current,
-	target_addr_t address, int handle_breakpoints, int debug_execution)
+static int avr32_ap7k_resume(struct target *target, bool current,
+	target_addr_t address, bool handle_breakpoints, bool debug_execution)
 {
 	struct avr32_ap7k_common *ap7k = target_to_ap7k(target);
 	struct breakpoint *breakpoint = NULL;
@@ -309,7 +309,7 @@ static int avr32_ap7k_resume(struct target *target, int current,
 	int retval;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -321,7 +321,7 @@ static int avr32_ap7k_resume(struct target *target, int current,
 		*/
 	}
 
-	/* current = 1: continue on current pc, otherwise continue at <address> */
+	/* current = true: continue on current pc, otherwise continue at <address> */
 	if (!current) {
 #if 0
 		if (retval != ERROR_OK)
@@ -337,7 +337,7 @@ static int avr32_ap7k_resume(struct target *target, int current,
 		/* Single step past breakpoint at current address */
 		breakpoint = breakpoint_find(target, resume_pc);
 		if (breakpoint) {
-			LOG_DEBUG("unset breakpoint at 0x%8.8" TARGET_PRIxADDR "", breakpoint->address);
+			LOG_DEBUG("unset breakpoint at 0x%8.8" TARGET_PRIxADDR, breakpoint->address);
 #if 0
 			avr32_ap7k_unset_breakpoint(target, breakpoint);
 			avr32_ap7k_single_step_core(target);
@@ -372,18 +372,18 @@ static int avr32_ap7k_resume(struct target *target, int current,
 	if (!debug_execution) {
 		target->state = TARGET_RUNNING;
 		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
-		LOG_DEBUG("target resumed at 0x%" PRIx32 "", resume_pc);
+		LOG_DEBUG("target resumed at 0x%" PRIx32, resume_pc);
 	} else {
 		target->state = TARGET_DEBUG_RUNNING;
 		target_call_event_callbacks(target, TARGET_EVENT_DEBUG_RESUMED);
-		LOG_DEBUG("target debug resumed at 0x%" PRIx32 "", resume_pc);
+		LOG_DEBUG("target debug resumed at 0x%" PRIx32, resume_pc);
 	}
 
 	return ERROR_OK;
 }
 
-static int avr32_ap7k_step(struct target *target, int current,
-	target_addr_t address, int handle_breakpoints)
+static int avr32_ap7k_step(struct target *target, bool current,
+	target_addr_t address, bool handle_breakpoints)
 {
 	LOG_ERROR("%s: implement me", __func__);
 
@@ -425,13 +425,13 @@ static int avr32_ap7k_read_memory(struct target *target, target_addr_t address,
 {
 	struct avr32_ap7k_common *ap7k = target_to_ap7k(target);
 
-	LOG_DEBUG("address: 0x%8.8" TARGET_PRIxADDR ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32 "",
+	LOG_DEBUG("address: 0x%8.8" TARGET_PRIxADDR ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32,
 		address,
 		size,
 		count);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -443,18 +443,18 @@ static int avr32_ap7k_read_memory(struct target *target, target_addr_t address,
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
 	switch (size) {
-		case 4:
-			return avr32_jtag_read_memory32(&ap7k->jtag, address, count,
-				(uint32_t *)(void *)buffer);
-			break;
-		case 2:
-			return avr32_jtag_read_memory16(&ap7k->jtag, address, count,
-				(uint16_t *)(void *)buffer);
-			break;
-		case 1:
-			return avr32_jtag_read_memory8(&ap7k->jtag, address, count, buffer);
-		default:
-			break;
+	case 4:
+		return avr32_jtag_read_memory32(&ap7k->jtag, address, count,
+			(uint32_t *)(void *)buffer);
+		break;
+	case 2:
+		return avr32_jtag_read_memory16(&ap7k->jtag, address, count,
+			(uint16_t *)(void *)buffer);
+		break;
+	case 1:
+		return avr32_jtag_read_memory8(&ap7k->jtag, address, count, buffer);
+	default:
+		break;
 	}
 
 	return ERROR_OK;
@@ -465,13 +465,13 @@ static int avr32_ap7k_write_memory(struct target *target, target_addr_t address,
 {
 	struct avr32_ap7k_common *ap7k = target_to_ap7k(target);
 
-	LOG_DEBUG("address: 0x%8.8" TARGET_PRIxADDR ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32 "",
+	LOG_DEBUG("address: 0x%8.8" TARGET_PRIxADDR ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32,
 		address,
 		size,
 		count);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -483,18 +483,18 @@ static int avr32_ap7k_write_memory(struct target *target, target_addr_t address,
 		return ERROR_TARGET_UNALIGNED_ACCESS;
 
 	switch (size) {
-		case 4:
-			return avr32_jtag_write_memory32(&ap7k->jtag, address, count,
-				(uint32_t *)(void *)buffer);
-			break;
-		case 2:
-			return avr32_jtag_write_memory16(&ap7k->jtag, address, count,
-				(uint16_t *)(void *)buffer);
-			break;
-		case 1:
-			return avr32_jtag_write_memory8(&ap7k->jtag, address, count, buffer);
-		default:
-			break;
+	case 4:
+		return avr32_jtag_write_memory32(&ap7k->jtag, address, count,
+			(uint32_t *)(void *)buffer);
+		break;
+	case 2:
+		return avr32_jtag_write_memory16(&ap7k->jtag, address, count,
+			(uint16_t *)(void *)buffer);
+		break;
+	case 1:
+		return avr32_jtag_write_memory8(&ap7k->jtag, address, count, buffer);
+	default:
+		break;
 	}
 
 	return ERROR_OK;
@@ -510,7 +510,7 @@ static int avr32_ap7k_init_target(struct command_context *cmd_ctx,
 	return ERROR_OK;
 }
 
-static int avr32_ap7k_target_create(struct target *target, Jim_Interp *interp)
+static int avr32_ap7k_target_create(struct target *target)
 {
 	struct avr32_ap7k_common *ap7k = calloc(1, sizeof(struct
 			avr32_ap7k_common));
@@ -548,7 +548,7 @@ static int avr32_ap7k_arch_state(struct target *target)
 {
 	struct avr32_ap7k_common *ap7k = target_to_ap7k(target);
 
-	LOG_USER("target halted due to %s, pc: 0x%8.8" PRIx32 "",
+	LOG_USER("target halted due to %s, pc: 0x%8.8" PRIx32,
 		debug_reason_name(target), ap7k->jtag.dpc);
 
 	return ERROR_OK;

@@ -22,7 +22,11 @@
  * facilities on the host computer. The target application must be linked
  * against a library that forwards operation requests by using the SVC
  * instruction trapped at the Supervisor Call vector by the debugger.
- * Details can be found in chapter 8 of DUI0203I_rvct_developer_guide.pdf
+ * Details can be found in
+ * "Semihosting for AArch32 and AArch64, 2025Q1"
+ * https://github.com/ARM-software/abi-aa/releases/download/2025Q1/semihosting.pdf
+ * and in
+ * https://developer.arm.com/documentation/dui0203/latest/semihosting
  * from ARM Ltd.
  */
 
@@ -50,7 +54,7 @@ static int arm_semihosting_resume(struct target *target, int *retval)
 	if (is_armv8(target_to_armv8(target))) {
 		struct armv8_common *armv8 = target_to_armv8(target);
 		if (armv8->last_run_control_op == ARMV8_RUNCONTROL_RESUME) {
-			*retval = target_resume(target, 1, 0, 0, 0);
+			*retval = target_resume(target, true, 0, false, false);
 			if (*retval != ERROR_OK) {
 				LOG_ERROR("Failed to resume target");
 				return 0;
@@ -58,7 +62,7 @@ static int arm_semihosting_resume(struct target *target, int *retval)
 		} else if (armv8->last_run_control_op == ARMV8_RUNCONTROL_STEP)
 			target->debug_reason = DBG_REASON_SINGLESTEP;
 	} else {
-		*retval = target_resume(target, 1, 0, 0, 0);
+		*retval = target_resume(target, true, 0, false, false);
 		if (*retval != ERROR_OK) {
 			LOG_ERROR("Failed to resume target");
 			return 0;

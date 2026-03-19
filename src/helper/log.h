@@ -15,11 +15,12 @@
 #define OPENOCD_HELPER_LOG_H
 
 #include <helper/command.h>
+#include <helper/compiler.h>
 
 /* To achieve C99 printf compatibility in MinGW, gnu_printf should be
  * used for __attribute__((format( ... ))), with GCC v4.4 or later
  */
-#if (defined(IS_MINGW) && (((__GNUC__ << 16) + __GNUC_MINOR__) >= 0x00040004))
+#if (defined(IS_MINGW) && (((__GNUC__ << 16) + __GNUC_MINOR__) >= 0x00040004)) && !defined(__clang__)
 #define PRINTF_ATTRIBUTE_FORMAT gnu_printf
 #else
 #define PRINTF_ATTRIBUTE_FORMAT printf
@@ -36,6 +37,13 @@
  * LOG_LVL_INFO - state information, etc.
  * LOG_LVL_DEBUG - debug statements, execution trace
  * LOG_LVL_DEBUG_IO - verbose debug, low-level I/O trace
+ * LOG_LVL_DEBUG_USB - verbose USB trace
+ *                     In the past this corresponded to build configuration options
+					   --enable-verbose and --enable-verbose-usb-comms.
+ * LOG_LVL_DEBUG_MALLOC - log messages will include the amount of free heap space
+ *                        maintained by malloc in its free list, if mallinfo is available.
+ *                        In the past this corresponded to build configuration
+ *                        option --enable-malloc-logging.
  */
 enum log_levels {
 	LOG_LVL_SILENT = -3,
@@ -46,14 +54,18 @@ enum log_levels {
 	LOG_LVL_INFO = 2,
 	LOG_LVL_DEBUG = 3,
 	LOG_LVL_DEBUG_IO = 4,
+	// LOG_LVL_DEBUG_USB and LOG_LVL_DEBUG_MALLOC have the same value at the moment.
+	// In the future, these logging categories will be individually switchable.
+	LOG_LVL_DEBUG_USB = 5,
+	LOG_LVL_DEBUG_MALLOC = 5,
 };
 
-void log_printf(enum log_levels level, const char *file, unsigned line,
+void log_printf(enum log_levels level, const char *file, unsigned int line,
 		const char *function, const char *format, ...)
 __attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 5, 6)));
-void log_vprintf_lf(enum log_levels level, const char *file, unsigned line,
+void log_vprintf_lf(enum log_levels level, const char *file, unsigned int line,
 		const char *function, const char *format, va_list args);
-void log_printf_lf(enum log_levels level, const char *file, unsigned line,
+void log_printf_lf(enum log_levels level, const char *file, unsigned int line,
 		const char *function, const char *format, ...)
 __attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 5, 6)));
 
@@ -73,7 +85,7 @@ void busy_sleep(uint64_t ms);
 
 void log_socket_error(const char *socket_desc);
 
-typedef void (*log_callback_fn)(void *priv, const char *file, unsigned line,
+typedef void (*log_callback_fn)(void *priv, const char *file, unsigned int line,
 		const char *function, const char *string);
 
 struct log_callback {
@@ -85,11 +97,12 @@ struct log_callback {
 int log_add_callback(log_callback_fn fn, void *priv);
 int log_remove_callback(log_callback_fn fn, void *priv);
 
-char *alloc_vprintf(const char *fmt, va_list ap);
+char *alloc_vprintf(const char *fmt, va_list ap)
+	__attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 1, 0))) __nonnull((1));
 char *alloc_printf(const char *fmt, ...)
-	__attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 1, 2)));
+	__attribute__ ((format (PRINTF_ATTRIBUTE_FORMAT, 1, 2))) __nonnull((1));
 
-char *find_nonprint_char(char *buf, unsigned buf_len);
+const char *find_nonprint_char(const char *buf, unsigned int buf_len);
 
 extern int debug_level;
 
@@ -98,18 +111,29 @@ extern int debug_level;
 
 #define LOG_LEVEL_IS(FOO)  ((debug_level) >= (FOO))
 
+#define LOG_DEBUG_USB(expr, ...) LOG_CUSTOM_LEVEL(LOG_LVL_DEBUG_USB, expr, ##__VA_ARGS__)
+
 #define LOG_DEBUG_IO(expr ...) \
 	do { \
-		if (debug_level >= LOG_LVL_DEBUG_IO) \
-			log_printf_lf(LOG_LVL_DEBUG, \
+		if (LOG_LEVEL_IS(LOG_LVL_DEBUG_IO)) \
+			log_printf_lf(LOG_LVL_DEBUG_IO, \
 				__FILE__, __LINE__, __func__, \
 				expr); \
 	} while (0)
 
 #define LOG_DEBUG(expr ...) \
 	do { \
-		if (debug_level >= LOG_LVL_DEBUG) \
+		if (LOG_LEVEL_IS(LOG_LVL_DEBUG)) \
 			log_printf_lf(LOG_LVL_DEBUG, \
+				__FILE__, __LINE__, __func__, \
+				expr); \
+	} while (0)
+
+#define LOG_CUSTOM_LEVEL(level, expr ...) \
+	do { \
+		enum log_levels _level = level; \
+		if (LOG_LEVEL_IS(_level)) \
+			log_printf_lf(_level, \
 				__FILE__, __LINE__, __func__, \
 				expr); \
 	} while (0)
@@ -142,6 +166,9 @@ extern int debug_level;
 
 #define LOG_TARGET_INFO(target, fmt_str, ...) \
 	LOG_INFO("[%s] " fmt_str, target_name(target), ##__VA_ARGS__)
+
+#define LOG_TARGET_USER(target, fmt_str, ...) \
+	LOG_USER("[%s] " fmt_str, target_name(target), ##__VA_ARGS__)
 
 #define LOG_TARGET_WARNING(target, fmt_str, ...) \
 	LOG_WARNING("[%s] " fmt_str, target_name(target), ##__VA_ARGS__)

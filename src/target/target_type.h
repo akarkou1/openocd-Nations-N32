@@ -42,10 +42,10 @@ struct target_type {
 	/* halt will log a warning, but return ERROR_OK if the target is already halted. */
 	int (*halt)(struct target *target);
 	/* See target.c target_resume() for documentation. */
-	int (*resume)(struct target *target, int current, target_addr_t address,
-			int handle_breakpoints, int debug_execution);
-	int (*step)(struct target *target, int current, target_addr_t address,
-			int handle_breakpoints);
+	int (*resume)(struct target *target, bool current, target_addr_t address,
+			bool handle_breakpoints, bool debug_execution);
+	int (*step)(struct target *target, bool current, target_addr_t address,
+			bool handle_breakpoints);
 	/* target reset control. assert reset can be invoked when OpenOCD and
 	 * the target is out of sync.
 	 *
@@ -83,7 +83,7 @@ struct target_type {
 	 * if dynamic allocation is used for this value, it must be managed by
 	 * the target, ideally by caching the result for subsequent calls.
 	 */
-	const char *(*get_gdb_arch)(struct target *target);
+	const char *(*get_gdb_arch)(const struct target *target);
 
 	/**
 	 * Target register access for GDB.  Do @b not call this function
@@ -112,6 +112,12 @@ struct target_type {
 	*/
 
 	/**
+	 * Returns true if target memory is read to read/write.
+	 * Do @b not call this function
+	 * directly, use target_memory_ready() instead.
+	 */
+	bool (*memory_ready)(struct target *target);
+	/**
 	 * Target memory read callback.  Do @b not call this function
 	 * directly, use target_read_memory() instead.
 	 */
@@ -135,8 +141,8 @@ struct target_type {
 	int (*checksum_memory)(struct target *target, target_addr_t address,
 			uint32_t count, uint32_t *checksum);
 	int (*blank_check_memory)(struct target *target,
-			struct target_memory_check_block *blocks, int num_blocks,
-			uint8_t erased_value);
+			struct target_memory_check_block *blocks, unsigned int num_blocks,
+			uint8_t erased_value, unsigned int *checked);
 
 	/*
 	 * target break-/watchpoint control
@@ -181,7 +187,7 @@ struct target_type {
 	int (*run_algorithm)(struct target *target, int num_mem_params,
 			struct mem_param *mem_params, int num_reg_params,
 			struct reg_param *reg_param, target_addr_t entry_point,
-			target_addr_t exit_point, int timeout_ms, void *arch_info);
+			target_addr_t exit_point, unsigned int timeout_ms, void *arch_info);
 	int (*start_algorithm)(struct target *target, int num_mem_params,
 			struct mem_param *mem_params, int num_reg_params,
 			struct reg_param *reg_param, target_addr_t entry_point,
@@ -189,21 +195,17 @@ struct target_type {
 	int (*wait_algorithm)(struct target *target, int num_mem_params,
 			struct mem_param *mem_params, int num_reg_params,
 			struct reg_param *reg_param, target_addr_t exit_point,
-			int timeout_ms, void *arch_info);
+			unsigned int timeout_ms, void *arch_info);
 
 	const struct command_registration *commands;
 
 	/* called when target is created */
-	int (*target_create)(struct target *target, Jim_Interp *interp);
+	int (*target_create)(struct target *target);
 
 	/* called for various config parameters */
 	/* returns JIM_CONTINUE - if option not understood */
 	/* otherwise: JIM_OK, or JIM_ERR, */
 	int (*target_jim_configure)(struct target *target, struct jim_getopt_info *goi);
-
-	/* target commands specifically handled by the target */
-	/* returns JIM_OK, or JIM_ERR, or JIM_CONTINUE - if option not understood */
-	int (*target_jim_commands)(struct target *target, struct jim_getopt_info *goi);
 
 	/**
 	 * This method is used to perform target setup that requires
@@ -268,7 +270,7 @@ struct target_type {
 	int (*write_phys_memory)(struct target *target, target_addr_t phys_address,
 			uint32_t size, uint32_t count, const uint8_t *buffer);
 
-	int (*mmu)(struct target *target, int *enabled);
+	int (*mmu)(struct target *target, bool *enabled);
 
 	/* after reset is complete, the target can check if things are properly set up.
 	 *
@@ -303,12 +305,52 @@ struct target_type {
 	/* Return the number of address bits this target supports. This will
 	 * typically be 32 for 32-bit targets, and 64 for 64-bit targets. If not
 	 * implemented, it's assumed to be 32. */
-	unsigned (*address_bits)(struct target *target);
+	unsigned int (*address_bits)(struct target *target);
 
 	/* Return the number of system bus data bits this target supports. This
 	 * will typically be 32 for 32-bit targets, and 64 for 64-bit targets. If
 	 * not implemented, it's assumed to be 32. */
 	unsigned int (*data_bits)(struct target *target);
 };
+
+// Keep in alphabetic order this list of targets
+extern struct target_type aarch64_target;
+extern struct target_type arcv2_target;
+extern struct target_type arm11_target;
+extern struct target_type arm720t_target;
+extern struct target_type arm7tdmi_target;
+extern struct target_type arm920t_target;
+extern struct target_type arm926ejs_target;
+extern struct target_type arm946e_target;
+extern struct target_type arm966e_target;
+extern struct target_type arm9tdmi_target;
+extern struct target_type armv8r_target;
+extern struct target_type avr32_ap7k_target;
+extern struct target_type avr_target;
+extern struct target_type cortexa_target;
+extern struct target_type cortexm_target;
+extern struct target_type cortexr4_target;
+extern struct target_type dragonite_target;
+extern struct target_type dsp563xx_target;
+extern struct target_type dsp5680xx_target;
+extern struct target_type esirisc_target;
+extern struct target_type esp32s2_target;
+extern struct target_type esp32s3_target;
+extern struct target_type esp32_target;
+extern struct target_type fa526_target;
+extern struct target_type feroceon_target;
+extern struct target_type hla_target;
+extern struct target_type ls1_sap_target;
+extern struct target_type mem_ap_target;
+extern struct target_type mips_m4k_target;
+extern struct target_type mips_mips64_target;
+extern struct target_type or1k_target;
+extern struct target_type quark_d20xx_target;
+extern struct target_type quark_x10xx_target;
+extern struct target_type riscv_target;
+extern struct target_type stm8_target;
+extern struct target_type testee_target;
+extern struct target_type xscale_target;
+extern struct target_type xtensa_chip_target;
 
 #endif /* OPENOCD_TARGET_TARGET_TYPE_H */

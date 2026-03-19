@@ -220,9 +220,9 @@ enum dsp563xx_reg_idx {
 };
 
 static const struct {
-	unsigned id;
+	unsigned int id;
 	const char *name;
-	unsigned bits;
+	unsigned int bits;
 	/* effective addressing mode encoding */
 	uint8_t eame;
 	uint32_t instr_mask;
@@ -741,37 +741,37 @@ static int dsp563xx_read_register(struct target *target, int num, int force)
 		arch_info = dsp563xx->core_cache->reg_list[num].arch_info;
 
 		switch (arch_info->num) {
-			case DSP563XX_REG_IDX_SSH:
-				err = dsp563xx_reg_ssh_read(target);
-				break;
-			case DSP563XX_REG_IDX_SSL:
-				err = dsp563xx_reg_ssl_read(target);
-				break;
-			case DSP563XX_REG_IDX_PC:
-				err = dsp563xx_reg_pc_read(target);
-				break;
-			case DSP563XX_REG_IDX_IPRC:
-			case DSP563XX_REG_IDX_IPRP:
-			case DSP563XX_REG_IDX_BCR:
-			case DSP563XX_REG_IDX_DCR:
-			case DSP563XX_REG_IDX_AAR0:
-			case DSP563XX_REG_IDX_AAR1:
-			case DSP563XX_REG_IDX_AAR2:
-			case DSP563XX_REG_IDX_AAR3:
-				err = dsp563xx_reg_read_high_io(target,
-						arch_info->instr_mask, &data);
-				if (err == ERROR_OK) {
-					dsp563xx->core_regs[num] = data;
-					dsp563xx->read_core_reg(target, num);
-				}
-				break;
-			default:
-				err = dsp563xx_reg_read(target, arch_info->eame, &data);
-				if (err == ERROR_OK) {
-					dsp563xx->core_regs[num] = data;
-					dsp563xx->read_core_reg(target, num);
-				}
-				break;
+		case DSP563XX_REG_IDX_SSH:
+			err = dsp563xx_reg_ssh_read(target);
+			break;
+		case DSP563XX_REG_IDX_SSL:
+			err = dsp563xx_reg_ssl_read(target);
+			break;
+		case DSP563XX_REG_IDX_PC:
+			err = dsp563xx_reg_pc_read(target);
+			break;
+		case DSP563XX_REG_IDX_IPRC:
+		case DSP563XX_REG_IDX_IPRP:
+		case DSP563XX_REG_IDX_BCR:
+		case DSP563XX_REG_IDX_DCR:
+		case DSP563XX_REG_IDX_AAR0:
+		case DSP563XX_REG_IDX_AAR1:
+		case DSP563XX_REG_IDX_AAR2:
+		case DSP563XX_REG_IDX_AAR3:
+			err = dsp563xx_reg_read_high_io(target,
+					arch_info->instr_mask, &data);
+			if (err == ERROR_OK) {
+				dsp563xx->core_regs[num] = data;
+				dsp563xx->read_core_reg(target, num);
+			}
+			break;
+		default:
+			err = dsp563xx_reg_read(target, arch_info->eame, &data);
+			if (err == ERROR_OK) {
+				dsp563xx->core_regs[num] = data;
+				dsp563xx->read_core_reg(target, num);
+			}
+			break;
 		}
 	}
 
@@ -793,37 +793,34 @@ static int dsp563xx_write_register(struct target *target, int num, int force)
 		dsp563xx->write_core_reg(target, num);
 
 		switch (arch_info->num) {
-			case DSP563XX_REG_IDX_SSH:
-				err = dsp563xx_reg_ssh_write(target);
-				break;
-			case DSP563XX_REG_IDX_PC:
-				/* pc is updated on resume, no need to write it here */
-				break;
-			case DSP563XX_REG_IDX_IPRC:
-			case DSP563XX_REG_IDX_IPRP:
-			case DSP563XX_REG_IDX_BCR:
-			case DSP563XX_REG_IDX_DCR:
-			case DSP563XX_REG_IDX_AAR0:
-			case DSP563XX_REG_IDX_AAR1:
-			case DSP563XX_REG_IDX_AAR2:
-			case DSP563XX_REG_IDX_AAR3:
-				err = dsp563xx_reg_write_high_io(target,
-					arch_info->instr_mask,
-					dsp563xx->core_regs[num]);
-				break;
-			default:
-				err = dsp563xx_reg_write(target,
-					arch_info->instr_mask,
-					dsp563xx->core_regs[num]);
+		case DSP563XX_REG_IDX_SSH:
+			err = dsp563xx_reg_ssh_write(target);
+			break;
+		case DSP563XX_REG_IDX_PC:
+			/* pc is updated on resume, no need to write it here */
+			break;
+		case DSP563XX_REG_IDX_IPRC:
+		case DSP563XX_REG_IDX_IPRP:
+		case DSP563XX_REG_IDX_BCR:
+		case DSP563XX_REG_IDX_DCR:
+		case DSP563XX_REG_IDX_AAR0:
+		case DSP563XX_REG_IDX_AAR1:
+		case DSP563XX_REG_IDX_AAR2:
+		case DSP563XX_REG_IDX_AAR3:
+			err = dsp563xx_reg_write_high_io(target,
+				arch_info->instr_mask,
+				dsp563xx->core_regs[num]);
+			break;
+		default:
+			err = dsp563xx_reg_write(target,
+				arch_info->instr_mask,
+				dsp563xx->core_regs[num]);
 
-				if ((err == ERROR_OK) && (arch_info->num == DSP563XX_REG_IDX_SP)) {
-					dsp563xx->core_cache->reg_list[DSP563XX_REG_IDX_SSH].valid =
-						0;
-					dsp563xx->core_cache->reg_list[DSP563XX_REG_IDX_SSL].valid =
-						0;
-				}
-
-				break;
+			if (err == ERROR_OK && arch_info->num == DSP563XX_REG_IDX_SP) {
+				dsp563xx->core_cache->reg_list[DSP563XX_REG_IDX_SSH].valid = 0;
+				dsp563xx->core_cache->reg_list[DSP563XX_REG_IDX_SSL].valid = 0;
+			}
+			break;
 		}
 	}
 
@@ -880,7 +877,7 @@ static void dsp563xx_invalidate_x_context(struct target *target,
 	}
 }
 
-static int dsp563xx_target_create(struct target *target, Jim_Interp *interp)
+static int dsp563xx_target_create(struct target *target)
 {
 	struct dsp563xx_common *dsp563xx = calloc(1, sizeof(struct dsp563xx_common));
 
@@ -912,7 +909,7 @@ static int dsp563xx_examine(struct target *target)
 {
 	uint32_t chip;
 
-	if (target->tap->hasidcode == false) {
+	if (!target->tap->has_idcode) {
 		LOG_ERROR("no IDCODE present on device");
 		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
@@ -1115,10 +1112,10 @@ static int dsp563xx_halt(struct target *target)
 }
 
 static int dsp563xx_resume(struct target *target,
-	int current,
+	bool current,
 	target_addr_t address,
-	int handle_breakpoints,
-	int debug_execution)
+	bool handle_breakpoints,
+	bool debug_execution)
 {
 	int err;
 	struct dsp563xx_common *dsp563xx = target_to_dsp563xx(target);
@@ -1132,10 +1129,10 @@ static int dsp563xx_resume(struct target *target,
 	if (current && dsp563xx->core_cache->reg_list[DSP563XX_REG_IDX_PC].dirty) {
 		dsp563xx_write_core_reg(target, DSP563XX_REG_IDX_PC);
 		address = dsp563xx->core_regs[DSP563XX_REG_IDX_PC];
-		current = 0;
+		current = false;
 	}
 
-	LOG_DEBUG("%s %08X %08X", __func__, current, (unsigned) address);
+	LOG_DEBUG("%s %08X %08" TARGET_PRIXADDR, __func__, current, address);
 
 	err = dsp563xx_restore_context(target);
 	if (err != ERROR_OK)
@@ -1172,9 +1169,9 @@ static int dsp563xx_resume(struct target *target,
 }
 
 static int dsp563xx_step_ex(struct target *target,
-	int current,
+	bool current,
 	uint32_t address,
-	int handle_breakpoints,
+	bool handle_breakpoints,
 	int steps)
 {
 	int err;
@@ -1196,10 +1193,10 @@ static int dsp563xx_step_ex(struct target *target,
 	if (current && dsp563xx->core_cache->reg_list[DSP563XX_REG_IDX_PC].dirty) {
 		dsp563xx_write_core_reg(target, DSP563XX_REG_IDX_PC);
 		address = dsp563xx->core_regs[DSP563XX_REG_IDX_PC];
-		current = 0;
+		current = false;
 	}
 
-	LOG_DEBUG("%s %08X %08X", __func__, current, (unsigned) address);
+	LOG_DEBUG("%s %08X %08" PRIX32, __func__, current, address);
 
 	err = dsp563xx_jtag_debug_request(target);
 	if (err != ERROR_OK)
@@ -1260,15 +1257,15 @@ static int dsp563xx_step_ex(struct target *target,
 			err = dsp563xx_once_reg_read(target->tap, 1, DSP563XX_ONCE_OPABFR, &dr_in);
 			if (err != ERROR_OK)
 				return err;
-			LOG_DEBUG("fetch: %08X", (unsigned) dr_in&0x00ffffff);
+			LOG_DEBUG("fetch: %08" PRIX32, dr_in & 0x00ffffff);
 			err = dsp563xx_once_reg_read(target->tap, 1, DSP563XX_ONCE_OPABDR, &dr_in);
 			if (err != ERROR_OK)
 				return err;
-			LOG_DEBUG("decode: %08X", (unsigned) dr_in&0x00ffffff);
+			LOG_DEBUG("decode: %08" PRIX32, dr_in & 0x00ffffff);
 			err = dsp563xx_once_reg_read(target->tap, 1, DSP563XX_ONCE_OPABEX, &dr_in);
 			if (err != ERROR_OK)
 				return err;
-			LOG_DEBUG("execute: %08X", (unsigned) dr_in&0x00ffffff);
+			LOG_DEBUG("execute: %08" PRIX32, dr_in & 0x00ffffff);
 
 			/* reset trace mode */
 			err = dsp563xx_once_reg_write(target->tap, 1, DSP563XX_ONCE_OSCR, 0x000000);
@@ -1288,15 +1285,15 @@ static int dsp563xx_step_ex(struct target *target,
 }
 
 static int dsp563xx_step(struct target *target,
-	int current,
+	bool current,
 	target_addr_t address,
-	int handle_breakpoints)
+	bool handle_breakpoints)
 {
 	int err;
 	struct dsp563xx_common *dsp563xx = target_to_dsp563xx(target);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -1359,7 +1356,7 @@ static int dsp563xx_deassert_reset(struct target *target)
 			 * reset vector and need 2 cycles to fill
 			 * the cache (fetch,decode,execute)
 			 */
-			err = dsp563xx_step_ex(target, 1, 0, 1, 1);
+			err = dsp563xx_step_ex(target, true, 0, true, 1);
 			if (err != ERROR_OK)
 				return err;
 		}
@@ -1374,14 +1371,14 @@ static int dsp563xx_run_algorithm(struct target *target,
 	int num_mem_params, struct mem_param *mem_params,
 	int num_reg_params, struct reg_param *reg_params,
 	target_addr_t entry_point, target_addr_t exit_point,
-	int timeout_ms, void *arch_info)
+	unsigned int timeout_ms, void *arch_info)
 {
 	int i;
 	int retval = ERROR_OK;
 	struct dsp563xx_common *dsp563xx = target_to_dsp563xx(target);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted (run target algo)");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -1419,7 +1416,7 @@ static int dsp563xx_run_algorithm(struct target *target,
 	}
 
 	/* exec */
-	retval = target_resume(target, 0, entry_point, 1, 1);
+	retval = target_resume(target, false, entry_point, true, true);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -1490,14 +1487,14 @@ static int dsp563xx_get_default_memory(void)
 		return MEM_P;
 
 	switch (c[0]) {
-		case '1':
-			return MEM_X;
-		case '2':
-			return MEM_Y;
-		case '3':
-			return MEM_L;
-		default:
-			break;
+	case '1':
+		return MEM_X;
+	case '2':
+		return MEM_Y;
+	case '3':
+		return MEM_L;
+	default:
+		break;
 	}
 
 	return MEM_P;
@@ -1517,7 +1514,7 @@ static int dsp563xx_read_memory_core(struct target *target,
 	uint8_t *b;
 
 	LOG_DEBUG(
-		"memtype: %d address: 0x%8.8" PRIx32 ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32 "",
+		"memtype: %d address: 0x%8.8" PRIx32 ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32,
 		mem_type,
 		address,
 		size,
@@ -1529,18 +1526,18 @@ static int dsp563xx_read_memory_core(struct target *target,
 	}
 
 	switch (mem_type) {
-		case MEM_X:
-			/* TODO: mark effected queued registers */
-			move_cmd = 0x61d800;
-			break;
-		case MEM_Y:
-			move_cmd = 0x69d800;
-			break;
-		case MEM_P:
-			move_cmd = 0x07d891;
-			break;
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
+	case MEM_X:
+		/* TODO: mark effected queued registers */
+		move_cmd = 0x61d800;
+		break;
+	case MEM_Y:
+		move_cmd = 0x69d800;
+		break;
+	case MEM_P:
+		move_cmd = 0x07d891;
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	/* we use r0 to store temporary data */
@@ -1698,31 +1695,31 @@ static int dsp563xx_write_memory_core(struct target *target,
 	const uint8_t *b;
 
 	LOG_DEBUG(
-		"memtype: %d address: 0x%8.8" TARGET_PRIxADDR ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32 "",
+		"memtype: %d address: 0x%8.8" TARGET_PRIxADDR ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32,
 		mem_type,
 		address,
 		size,
 		count);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
 	switch (mem_type) {
-		case MEM_X:
-			/* invalidate affected x registers */
-			dsp563xx_invalidate_x_context(target, address, address + count - 1);
-			move_cmd = 0x615800;
-			break;
-		case MEM_Y:
-			move_cmd = 0x695800;
-			break;
-		case MEM_P:
-			move_cmd = 0x075891;
-			break;
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
+	case MEM_X:
+		/* invalidate affected x registers */
+		dsp563xx_invalidate_x_context(target, address, address + count - 1);
+		move_cmd = 0x615800;
+		break;
+	case MEM_Y:
+		move_cmd = 0x695800;
+		break;
+	case MEM_P:
+		move_cmd = 0x075891;
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	/* we use r0 to store temporary data */
@@ -1896,55 +1893,55 @@ static int dsp563xx_add_custom_watchpoint(struct target *target, uint32_t addres
 	if	(err == ERROR_OK) {
 		obcr_value |= OBCR_B0_OR_B1;
 		switch (mem_type) {
-			case MEM_X:
-				obcr_value |= OBCR_BP_MEM_X;
-				break;
-			case MEM_Y:
-				obcr_value |= OBCR_BP_MEM_Y;
-				break;
-			case MEM_P:
-				obcr_value |= OBCR_BP_MEM_P;
-				break;
-			default:
-				LOG_ERROR("Unknown mem_type parameter (%" PRIu32 ")", mem_type);
-				err = ERROR_TARGET_INVALID;
+		case MEM_X:
+			obcr_value |= OBCR_BP_MEM_X;
+			break;
+		case MEM_Y:
+			obcr_value |= OBCR_BP_MEM_Y;
+			break;
+		case MEM_P:
+			obcr_value |= OBCR_BP_MEM_P;
+			break;
+		default:
+			LOG_ERROR("Unknown mem_type parameter (%" PRIu32 ")", mem_type);
+			err = ERROR_TARGET_INVALID;
 		}
 	}
 
 	if (err == ERROR_OK) {
 		switch (rw) {
-			case WPT_READ:
-				obcr_value |= OBCR_BP_0(OBCR_BP_ON_READ);
-				break;
-			case WPT_WRITE:
-				obcr_value |= OBCR_BP_0(OBCR_BP_ON_WRITE);
-				break;
-			case WPT_ACCESS:
-				obcr_value |= OBCR_BP_0(OBCR_BP_ON_READ|OBCR_BP_ON_WRITE);
-				break;
-			default:
-				LOG_ERROR("Unsupported write mode (%d)", rw);
-				err = ERROR_TARGET_INVALID;
+		case WPT_READ:
+			obcr_value |= OBCR_BP_0(OBCR_BP_ON_READ);
+			break;
+		case WPT_WRITE:
+			obcr_value |= OBCR_BP_0(OBCR_BP_ON_WRITE);
+			break;
+		case WPT_ACCESS:
+			obcr_value |= OBCR_BP_0(OBCR_BP_ON_READ | OBCR_BP_ON_WRITE);
+			break;
+		default:
+			LOG_ERROR("Unsupported write mode (%d)", rw);
+			err = ERROR_TARGET_INVALID;
 		}
 	}
 
 	if (err == ERROR_OK) {
 		switch (cond) {
-			case EQUAL:
-				obcr_value |= OBCR_BP_0(OBCR_BP_CC_EQUAL);
-				break;
-			case NOT_EQUAL:
-				obcr_value |= OBCR_BP_0(OBCR_BP_CC_NOT_EQUAL);
-				break;
-			case LESS_THAN:
-				obcr_value |= OBCR_BP_0(OBCR_BP_CC_LESS_THAN);
-				break;
-			case GREATER:
-				obcr_value |= OBCR_BP_0(OBCR_BP_CC_GREATER_THAN);
-				break;
-			default:
-				LOG_ERROR("Unsupported condition code (%d)", cond);
-				err = ERROR_TARGET_INVALID;
+		case EQUAL:
+			obcr_value |= OBCR_BP_0(OBCR_BP_CC_EQUAL);
+			break;
+		case NOT_EQUAL:
+			obcr_value |= OBCR_BP_0(OBCR_BP_CC_NOT_EQUAL);
+			break;
+		case LESS_THAN:
+			obcr_value |= OBCR_BP_0(OBCR_BP_CC_LESS_THAN);
+			break;
+		case GREATER:
+			obcr_value |= OBCR_BP_0(OBCR_BP_CC_GREATER_THAN);
+			break;
+		default:
+			LOG_ERROR("Unsupported condition code (%d)", cond);
+			err = ERROR_TARGET_INVALID;
 		}
 	}
 
@@ -1972,7 +1969,7 @@ static int dsp563xx_add_custom_watchpoint(struct target *target, uint32_t addres
 
 	if (err == ERROR_OK && was_running) {
 		/* Resume from current PC */
-		err = dsp563xx_resume(target, 1, 0x0, 0, 0);
+		err = dsp563xx_resume(target, true, 0x0, false, false);
 	}
 
 	return err;
@@ -2006,17 +2003,17 @@ COMMAND_HANDLER(dsp563xx_add_watchpoint_command)
 
 	uint32_t mem_type = 0;
 	switch (CMD_NAME[2]) {
-		case 'x':
-			mem_type = MEM_X;
-			break;
-		case 'y':
-			mem_type = MEM_Y;
-			break;
-		case 'p':
-			mem_type = MEM_P;
-			break;
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
+	case 'x':
+		mem_type = MEM_X;
+		break;
+	case 'y':
+		mem_type = MEM_Y;
+		break;
+	case 'p':
+		mem_type = MEM_P;
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	if (CMD_ARGC < 2)
@@ -2028,35 +2025,35 @@ COMMAND_HANDLER(dsp563xx_add_watchpoint_command)
 
 	enum watchpoint_condition cond;
 	switch (CMD_ARGV[0][0]) {
-		case '>':
-			cond = GREATER;
-			break;
-		case '<':
-			cond = LESS_THAN;
-			break;
-		case '=':
-			cond = EQUAL;
-			break;
-		case '!':
-			cond = NOT_EQUAL;
-			break;
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
+	case '>':
+		cond = GREATER;
+		break;
+	case '<':
+		cond = LESS_THAN;
+		break;
+	case '=':
+		cond = EQUAL;
+		break;
+	case '!':
+		cond = NOT_EQUAL;
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	enum watchpoint_rw rw;
 	switch (CMD_ARGV[1][0]) {
-		case 'r':
-			rw = WPT_READ;
-			break;
-		case 'w':
-			rw = WPT_WRITE;
-			break;
-		case 'a':
-			rw = WPT_ACCESS;
-			break;
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
+	case 'r':
+		rw = WPT_READ;
+		break;
+	case 'w':
+		rw = WPT_WRITE;
+		break;
+	case 'a':
+		rw = WPT_ACCESS;
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	err = dsp563xx_add_custom_watchpoint(target, address, mem_type, rw, cond);
@@ -2097,28 +2094,28 @@ COMMAND_HANDLER(dsp563xx_mem_command)
 	uint8_t *buffer, *b;
 
 	switch (CMD_NAME[1]) {
-		case 'w':
-			read_mem = 0;
-			break;
-		case 'd':
-			read_mem = 1;
-			break;
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
+	case 'w':
+		read_mem = 0;
+		break;
+	case 'd':
+		read_mem = 1;
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	switch (CMD_NAME[3]) {
-		case 'x':
-			mem_type = MEM_X;
-			break;
-		case 'y':
-			mem_type = MEM_Y;
-			break;
-		case 'p':
-			mem_type = MEM_P;
-			break;
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
+	case 'x':
+		mem_type = MEM_X;
+		break;
+	case 'y':
+		mem_type = MEM_Y;
+		break;
+	case 'p':
+		mem_type = MEM_P;
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	if (CMD_ARGC > 0)
@@ -2146,7 +2143,8 @@ COMMAND_HANDLER(dsp563xx_mem_command)
 		err = dsp563xx_read_memory(target, mem_type, address, sizeof(uint32_t),
 				count, buffer);
 		if (err == ERROR_OK)
-			target_handle_md_output(CMD, target, address, sizeof(uint32_t), count, buffer);
+			target_handle_md_output(CMD, target, address, sizeof(uint32_t),
+				count, buffer, true);
 
 	} else {
 		b = buffer;

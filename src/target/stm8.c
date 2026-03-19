@@ -13,14 +13,12 @@
 #include <helper/log.h>
 #include "target.h"
 #include "target_type.h"
-#include "hello.h"
 #include "jtag/interface.h"
 #include "jtag/jtag.h"
 #include "jtag/swim.h"
 #include "register.h"
 #include "breakpoints.h"
 #include "algorithm.h"
-#include "stm8.h"
 
 static struct reg_cache *stm8_build_reg_cache(struct target *target);
 static int stm8_read_core_reg(struct target *target, unsigned int num);
@@ -38,7 +36,7 @@ static int (*adapter_speed)(int speed);
 extern struct adapter_driver *adapter_driver;
 
 static const struct {
-	unsigned id;
+	unsigned int id;
 	const char *name;
 	const uint8_t bits;
 	enum reg_type type;
@@ -53,6 +51,8 @@ static const struct {
 	{  4,  "sp", 16, REG_TYPE_UINT16, "general", "org.gnu.gdb.stm8.core", 0 },
 	{  5,  "cc", 8, REG_TYPE_UINT8, "general", "org.gnu.gdb.stm8.core", 0 },
 };
+
+#define STM8_COMMON_MAGIC	0x53544D38U
 
 #define STM8_NUM_REGS ARRAY_SIZE(stm8_regs)
 #define STM8_PC 0
@@ -167,6 +167,51 @@ struct stm8_comparator {
 	uint32_t reg_address;
 	enum hw_break_type type;
 };
+
+struct stm8_common {
+	unsigned int common_magic;
+
+	void *arch_info;
+	struct reg_cache *core_cache;
+	uint32_t core_regs[STM8_NUM_REGS];
+
+	/* working area for fastdata access */
+	struct working_area *fast_data_area;
+
+	bool swim_configured;
+	bool bp_scanned;
+	uint8_t num_hw_bpoints;
+	uint8_t num_hw_bpoints_avail;
+	struct stm8_comparator *hw_break_list;
+	uint32_t blocksize;
+	uint32_t flashstart;
+	uint32_t flashend;
+	uint32_t eepromstart;
+	uint32_t eepromend;
+	uint32_t optionstart;
+	uint32_t optionend;
+	bool enable_step_irq;
+
+	bool enable_stm8l;
+	uint32_t flash_cr2;
+	uint32_t flash_ncr2;
+	uint32_t flash_iapsr;
+	uint32_t flash_dukr;
+	uint32_t flash_pukr;
+
+	/* cc value used for interrupt flags restore */
+	uint32_t cc;
+	bool cc_valid;
+
+	/* register cache to processor synchronization */
+	int (*read_core_reg)(struct target *target, unsigned int num);
+	int (*write_core_reg)(struct target *target, unsigned int num);
+};
+
+static struct stm8_common *target_to_stm8(struct target *target)
+{
+	return target->arch_info;
+}
 
 static int stm8_adapter_read_memory(struct target *target,
 		uint32_t addr, int size, int count, void *buf)
@@ -542,12 +587,12 @@ static int stm8_get_core_reg(struct reg *reg)
 	int retval;
 	struct stm8_core_reg *stm8_reg = reg->arch_info;
 	struct target *target = stm8_reg->target;
-	struct stm8_common *stm8_target = target_to_stm8(target);
+	struct stm8_common *stm8 = target_to_stm8(target);
 
 	if (target->state != TARGET_HALTED)
 		return ERROR_TARGET_NOT_HALTED;
 
-	retval = stm8_target->read_core_reg(target, stm8_reg->num);
+	retval = stm8->read_core_reg(target, stm8_reg->num);
 
 	return retval;
 }
@@ -659,19 +704,19 @@ static int stm8_write_flash(struct target *target, enum mem_type type,
 	int res;
 
 	switch (type) {
-		case (FLASH):
-			stm8_unlock_flash(target);
-			break;
-		case (EEPROM):
-			stm8_unlock_eeprom(target);
-			break;
-		case (OPTION):
-			stm8_unlock_eeprom(target);
-			opt = OPT;
-			break;
-		default:
-			LOG_ERROR("BUG: wrong mem_type %d", type);
-			assert(0);
+	case FLASH:
+		stm8_unlock_flash(target);
+		break;
+	case EEPROM:
+		stm8_unlock_eeprom(target);
+		break;
+	case OPTION:
+		stm8_unlock_eeprom(target);
+		opt = OPT;
+		break;
+	default:
+		LOG_ERROR("BUG: wrong mem_type %d", type);
+		assert(0);
 	}
 
 	if (size == 2) {
@@ -689,15 +734,13 @@ static int stm8_write_flash(struct target *target, enum mem_type type,
 			if (stm8->flash_ncr2)
 				stm8_write_u8(target, stm8->flash_ncr2, ~(PRG + opt));
 			blocksize = blocksize_param;
-		} else
-		if ((bytecnt >= 4) && ((address & 0x3) == 0)) {
+		} else if ((bytecnt >= 4) && ((address & 0x3) == 0)) {
 			if (stm8->flash_cr2)
 				stm8_write_u8(target, stm8->flash_cr2, WPRG + opt);
 			if (stm8->flash_ncr2)
 				stm8_write_u8(target, stm8->flash_ncr2, ~(WPRG + opt));
 			blocksize = 4;
-		} else
-		if (blocksize != 1) {
+		} else if (blocksize != 1) {
 			if (stm8->flash_cr2)
 				stm8_write_u8(target, stm8->flash_cr2, opt);
 			if (stm8->flash_ncr2)
@@ -827,7 +870,7 @@ static int stm8_poll(struct target *target)
 	uint8_t csr1, csr2;
 
 #ifdef LOG_STM8
-	LOG_DEBUG("target->state=%d", target->state);
+	LOG_DEBUG("target->state %s", target_state_name(target));
 #endif
 
 	/* read dm_csrx control regs */
@@ -982,9 +1025,9 @@ static int stm8_single_step_core(struct target *target)
 	return ERROR_OK;
 }
 
-static int stm8_resume(struct target *target, int current,
-		target_addr_t address, int handle_breakpoints,
-		int debug_execution)
+static int stm8_resume(struct target *target, bool current,
+		target_addr_t address, bool handle_breakpoints,
+		bool debug_execution)
 {
 	struct stm8_common *stm8 = target_to_stm8(target);
 	struct breakpoint *breakpoint = NULL;
@@ -994,7 +1037,7 @@ static int stm8_resume(struct target *target, int current,
 			handle_breakpoints, debug_execution);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -1006,7 +1049,7 @@ static int stm8_resume(struct target *target, int current,
 		stm8_set_hwbreak(target, comparator_list);
 	}
 
-	/* current = 1: continue on current pc,
+	/* current = true: continue on current pc,
 	   otherwise continue at <address> */
 	if (!current) {
 		buf_set_u32(stm8->core_cache->reg_list[STM8_PC].value,
@@ -1051,11 +1094,11 @@ static int stm8_resume(struct target *target, int current,
 	if (!debug_execution) {
 		target->state = TARGET_RUNNING;
 		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
-		LOG_DEBUG("target resumed at 0x%" PRIx32 "", resume_pc);
+		LOG_DEBUG("target resumed at 0x%" PRIx32, resume_pc);
 	} else {
 		target->state = TARGET_DEBUG_RUNNING;
 		target_call_event_callbacks(target, TARGET_EVENT_DEBUG_RESUMED);
-		LOG_DEBUG("target debug resumed at 0x%" PRIx32 "", resume_pc);
+		LOG_DEBUG("target debug resumed at 0x%" PRIx32, resume_pc);
 	}
 
 	return ERROR_OK;
@@ -1108,8 +1151,7 @@ static int stm8_init_arch_info(struct target *target,
 	return ERROR_OK;
 }
 
-static int stm8_target_create(struct target *target,
-		Jim_Interp *interp)
+static int stm8_target_create(struct target *target)
 {
 
 	struct stm8_common *stm8 = calloc(1, sizeof(struct stm8_common));
@@ -1131,7 +1173,7 @@ static int stm8_read_core_reg(struct target *target, unsigned int num)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	reg_value = stm8->core_regs[num];
-	LOG_DEBUG("read core reg %i value 0x%" PRIx32 "", num, reg_value);
+	LOG_DEBUG("read core reg %i value 0x%" PRIx32, num, reg_value);
 	buf_set_u32(stm8->core_cache->reg_list[num].value, 0, 32, reg_value);
 	stm8->core_cache->reg_list[num].valid = true;
 	stm8->core_cache->reg_list[num].dirty = false;
@@ -1151,14 +1193,14 @@ static int stm8_write_core_reg(struct target *target, unsigned int num)
 
 	reg_value = buf_get_u32(stm8->core_cache->reg_list[num].value, 0, 32);
 	stm8->core_regs[num] = reg_value;
-	LOG_DEBUG("write core reg %i value 0x%" PRIx32 "", num, reg_value);
+	LOG_DEBUG("write core reg %i value 0x%" PRIx32, num, reg_value);
 	stm8->core_cache->reg_list[num].valid = true;
 	stm8->core_cache->reg_list[num].dirty = false;
 
 	return ERROR_OK;
 }
 
-static const char *stm8_get_gdb_arch(struct target *target)
+static const char *stm8_get_gdb_arch(const struct target *target)
 {
 	return "stm8";
 }
@@ -1285,15 +1327,15 @@ static int stm8_arch_state(struct target *target)
 {
 	struct stm8_common *stm8 = target_to_stm8(target);
 
-	LOG_USER("target halted due to %s, pc: 0x%8.8" PRIx32 "",
+	LOG_USER("target halted due to %s, pc: 0x%8.8" PRIx32,
 		debug_reason_name(target),
 		buf_get_u32(stm8->core_cache->reg_list[STM8_PC].value, 0, 32));
 
 	return ERROR_OK;
 }
 
-static int stm8_step(struct target *target, int current,
-		target_addr_t address, int handle_breakpoints)
+static int stm8_step(struct target *target, bool current,
+		target_addr_t address, bool handle_breakpoints)
 {
 	LOG_DEBUG("%x " TARGET_ADDR_FMT " %x",
 		current, address, handle_breakpoints);
@@ -1303,11 +1345,11 @@ static int stm8_step(struct target *target, int current,
 	struct breakpoint *breakpoint = NULL;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	/* current = 1: continue on current pc, otherwise continue at <address> */
+	/* current = true: continue on current pc, otherwise continue at <address> */
 	if (!current) {
 		buf_set_u32(stm8->core_cache->reg_list[STM8_PC].value, 0, 32, address);
 		stm8->core_cache->reg_list[STM8_PC].dirty = true;
@@ -1396,7 +1438,7 @@ static int stm8_set_breakpoint(struct target *target,
 		if (retval != ERROR_OK)
 			return retval;
 
-		LOG_DEBUG("bpid: %" PRIu32 ", bp_num %i bp_value 0x%" PRIx32 "",
+		LOG_DEBUG("bpid: %" PRIu32 ", bp_num %i bp_value 0x%" PRIx32,
 				  breakpoint->unique_id,
 				  bp_num, comparator_list[bp_num].bp_value);
 	} else if (breakpoint->type == BKPT_SOFT) {
@@ -1518,7 +1560,7 @@ static int stm8_remove_breakpoint(struct target *target,
 	struct stm8_common *stm8 = target_to_stm8(target);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -1552,24 +1594,24 @@ static int stm8_set_watchpoint(struct target *target,
 	}
 
 	if (watchpoint->length != 1) {
-			LOG_ERROR("Only watchpoints of length 1 are supported");
-			return ERROR_TARGET_UNALIGNED_ACCESS;
+		LOG_ERROR("Only watchpoints of length 1 are supported");
+		return ERROR_TARGET_UNALIGNED_ACCESS;
 	}
 
 	enum hw_break_type enable = 0;
 
 	switch (watchpoint->rw) {
-		case WPT_READ:
-			enable = HWBRK_RD;
-			break;
-		case WPT_WRITE:
-			enable = HWBRK_WR;
-			break;
-		case WPT_ACCESS:
-			enable = HWBRK_ACC;
-			break;
-		default:
-			LOG_ERROR("BUG: watchpoint->rw neither read, write nor access");
+	case WPT_READ:
+		enable = HWBRK_RD;
+		break;
+	case WPT_WRITE:
+		enable = HWBRK_WR;
+		break;
+	case WPT_ACCESS:
+		enable = HWBRK_ACC;
+		break;
+	default:
+		LOG_ERROR("BUG: watchpoint->rw neither read, write nor access");
 	}
 
 	comparator_list[wp_num].used = true;
@@ -1584,7 +1626,7 @@ static int stm8_set_watchpoint(struct target *target,
 
 	watchpoint_set(watchpoint, wp_num);
 
-	LOG_DEBUG("wp_num %i bp_value 0x%" PRIx32 "",
+	LOG_DEBUG("wp_num %i bp_value 0x%" PRIx32,
 			wp_num,
 			comparator_list[wp_num].bp_value);
 
@@ -1654,7 +1696,7 @@ static int stm8_remove_watchpoint(struct target *target,
 	struct stm8_common *stm8 = target_to_stm8(target);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -1715,7 +1757,8 @@ static int stm8_examine(struct target *target)
 
 /** Checks whether a memory region is erased. */
 static int stm8_blank_check_memory(struct target *target,
-		struct target_memory_check_block *blocks, int num_blocks, uint8_t erased_value)
+		struct target_memory_check_block *blocks, unsigned int num_blocks,
+		uint8_t erased_value, unsigned int *checked)
 {
 	struct working_area *erase_check_algorithm;
 	struct reg_param reg_params[2];
@@ -1759,8 +1802,10 @@ static int stm8_blank_check_memory(struct target *target,
 			erase_check_algorithm->address + (sizeof(stm8_erase_check_code) - 1),
 			10000, &stm8_info);
 
-	if (retval == ERROR_OK)
+	if (retval == ERROR_OK) {
 		blocks[0].result = (*(reg_params[0].value) == 0xff);
+		*checked = 1;	/* only one block has been checked */
+	}
 
 	destroy_mem_param(&mem_params[0]);
 	destroy_mem_param(&mem_params[1]);
@@ -1769,10 +1814,7 @@ static int stm8_blank_check_memory(struct target *target,
 
 	target_free_working_area(target, erase_check_algorithm);
 
-	if (retval != ERROR_OK)
-		return retval;
-
-	return 1;	/* only one block has been checked */
+	return retval;
 }
 
 static int stm8_checksum_memory(struct target *target, target_addr_t address,
@@ -1784,14 +1826,14 @@ static int stm8_checksum_memory(struct target *target, target_addr_t address,
 
 /* run to exit point. return error if exit point was not reached. */
 static int stm8_run_and_wait(struct target *target, uint32_t entry_point,
-		int timeout_ms, uint32_t exit_point, struct stm8_common *stm8)
+		unsigned int timeout_ms, uint32_t exit_point, struct stm8_common *stm8)
 {
 	uint32_t pc;
 	int retval;
 	/* This code relies on the target specific resume() and
 	   poll()->debug_entry() sequence to write register values to the
 	   processor and the read them back */
-	retval = target_resume(target, 0, entry_point, 0, 1);
+	retval = target_resume(target, false, entry_point, false, true);
 	if (retval != ERROR_OK)
 		return retval;
 
@@ -1819,7 +1861,7 @@ static int stm8_run_and_wait(struct target *target, uint32_t entry_point,
 static int stm8_run_algorithm(struct target *target, int num_mem_params,
 		struct mem_param *mem_params, int num_reg_params,
 		struct reg_param *reg_params, target_addr_t entry_point,
-		target_addr_t exit_point, int timeout_ms, void *arch_info)
+		target_addr_t exit_point, unsigned int timeout_ms, void *arch_info)
 {
 	struct stm8_common *stm8 = target_to_stm8(target);
 

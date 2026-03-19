@@ -29,6 +29,27 @@ ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", MODE="660", GROUP="plugdev", 
 # Original FT231XQ VID:PID
 ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", MODE="660", GROUP="plugdev", TAG+="uaccess"
 
+# Original FT2233HP VID:PID
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6040", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# Original FT4233HP VID:PID
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6041", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# Original FT2232HP VID:PID
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6042", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# Original FT4232HP VID:PID
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6043", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# Original FT233HP VID:PID
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6044", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# Original FT232HP VID:PID
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6045", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# Original FT4232HA VID:PID
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6048", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
 # DISTORTEC JTAG-lock-pick Tiny 2
 ATTRS{idVendor}=="0403", ATTRS{idProduct}=="8220", MODE="660", GROUP="plugdev", TAG+="uaccess"
 
@@ -99,6 +120,8 @@ ATTRS{idVendor}=="0483", ATTRS{idProduct}=="374e", MODE="660", GROUP="plugdev", 
 ATTRS{idVendor}=="0483", ATTRS{idProduct}=="374f", MODE="660", GROUP="plugdev", TAG+="uaccess"
 ATTRS{idVendor}=="0483", ATTRS{idProduct}=="3753", MODE="660", GROUP="plugdev", TAG+="uaccess"
 ATTRS{idVendor}=="0483", ATTRS{idProduct}=="3754", MODE="660", GROUP="plugdev", TAG+="uaccess"
+ATTRS{idVendor}=="0483", ATTRS{idProduct}=="3755", MODE="660", GROUP="plugdev", TAG+="uaccess"
+ATTRS{idVendor}=="0483", ATTRS{idProduct}=="3757", MODE="660", GROUP="plugdev", TAG+="uaccess"
 
 # Cypress SuperSpeed Explorer Kit
 ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="0007", MODE="660", GROUP="plugdev", TAG+="uaccess"
@@ -167,6 +190,10 @@ ATTRS{idVendor}=="138e", ATTRS{idProduct}=="9000", MODE="660", GROUP="plugdev", 
 # Debug Board for Neo1973
 ATTRS{idVendor}=="1457", ATTRS{idProduct}=="5118", MODE="660", GROUP="plugdev", TAG+="uaccess"
 
+# Microchip RISC-V Debug
+ATTRS{idVendor}=="1514", ATTRS{idProduct}=="2008", MODE="660", GROUP="plugdev", TAG+="uaccess"
+ATTRS{idVendor}=="1514", ATTRS{idProduct}=="200a", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
 # OSBDM
 ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="0042", MODE="660", GROUP="plugdev", TAG+="uaccess"
 ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="0058", MODE="660", GROUP="plugdev", TAG+="uaccess"
@@ -192,6 +219,11 @@ ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="06ad", MODE="660", GROUP="plugdev", 
 
 # USBprog with OpenOCD firmware
 ATTRS{idVendor}=="1781", ATTRS{idProduct}=="0c63", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# WCH CH347T chip in mode 3
+ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55dd", MODE="660", GROUP="plugdev", TAG+="uaccess"
+# WCH CH347F chip
+ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55de", MODE="660", GROUP="plugdev", TAG+="uaccess"
 
 # TI/Luminary Stellaris In-Circuit Debug Interface (ICDI) Board
 ATTRS{idVendor}=="1cbe", ATTRS{idProduct}=="00fd", MODE="660", GROUP="plugdev", TAG+="uaccess"
@@ -221,6 +253,11 @@ ATTRS{idVendor}=="2aec", ATTRS{idProduct}=="1106", MODE="660", GROUP="plugdev", 
 # Espressif USB JTAG/serial debug units
 ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE="660", GROUP="plugdev", TAG+="uaccess"
 ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1002", MODE="660", GROUP="plugdev", TAG+="uaccess"
+
+# ANGIE USB-JTAG Adapter
+ATTRS{idVendor}=="584e", ATTRS{idProduct}=="414f", MODE="660", GROUP="plugdev", TAG+="uaccess"
+ATTRS{idVendor}=="584e", ATTRS{idProduct}=="424e", MODE="660", GROUP="plugdev", TAG+="uaccess"
+ATTRS{idVendor}=="584e", ATTRS{idProduct}=="4a55", MODE="660", GROUP="plugdev", TAG+="uaccess"
 
 # Marvell Sheevaplug
 ATTRS{idVendor}=="9e88", ATTRS{idProduct}=="9e8f", MODE="660", GROUP="plugdev", TAG+="uaccess"

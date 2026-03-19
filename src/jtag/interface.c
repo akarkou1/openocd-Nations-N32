@@ -26,15 +26,15 @@
  * @see tap_set_state() and tap_get_state() accessors.
  * Actual name is not important since accessors hide it.
  */
-static tap_state_t state_follower = TAP_RESET;
+static enum tap_state state_follower = TAP_RESET;
 
-void tap_set_state_impl(tap_state_t new_state)
+void tap_set_state_impl(enum tap_state new_state)
 {
 	/* this is the state we think the TAPs are in now, was cur_state */
 	state_follower = new_state;
 }
 
-tap_state_t tap_get_state(void)
+enum tap_state tap_get_state(void)
 {
 	return state_follower;
 }
@@ -43,9 +43,9 @@ tap_state_t tap_get_state(void)
  * @see tap_set_end_state() and tap_get_end_state() accessors.
  * Actual name is not important because accessors hide it.
  */
-static tap_state_t end_state_follower = TAP_RESET;
+static enum tap_state end_state_follower = TAP_RESET;
 
-void tap_set_end_state(tap_state_t new_end_state)
+void tap_set_end_state(enum tap_state new_end_state)
 {
 	/* this is the state we think the TAPs will be in at completion of the
 	 * current TAP operation, was end_state
@@ -53,12 +53,12 @@ void tap_set_end_state(tap_state_t new_end_state)
 	end_state_follower = new_end_state;
 }
 
-tap_state_t tap_get_end_state(void)
+enum tap_state tap_get_end_state(void)
 {
 	return end_state_follower;
 }
 
-int tap_move_ndx(tap_state_t astate)
+int tap_move_ndx(enum tap_state astate)
 {
 	/* given a stable state, return the index into the tms_seqs[]
 	 * array within tap_get_tms_path()
@@ -67,28 +67,28 @@ int tap_move_ndx(tap_state_t astate)
 	int ndx;
 
 	switch (astate) {
-		case TAP_RESET:
-			ndx = 0;
-			break;
-		case TAP_IDLE:
-			ndx = 1;
-			break;
-		case TAP_DRSHIFT:
-			ndx = 2;
-			break;
-		case TAP_DRPAUSE:
-			ndx = 3;
-			break;
-		case TAP_IRSHIFT:
-			ndx = 4;
-			break;
-		case TAP_IRPAUSE:
-			ndx = 5;
-			break;
-		default:
-			LOG_ERROR("FATAL: unstable state \"%s\" in tap_move_ndx()",
-					tap_state_name(astate));
-			exit(1);
+	case TAP_RESET:
+		ndx = 0;
+		break;
+	case TAP_IDLE:
+		ndx = 1;
+		break;
+	case TAP_DRSHIFT:
+		ndx = 2;
+		break;
+	case TAP_DRPAUSE:
+		ndx = 3;
+		break;
+	case TAP_IRSHIFT:
+		ndx = 4;
+		break;
+	case TAP_IRPAUSE:
+		ndx = 5;
+		break;
+	default:
+		LOG_ERROR("FATAL: unstable state \"%s\" in %s()",
+				tap_state_name(astate), __func__);
+		exit(1);
 	}
 
 	return ndx;
@@ -187,17 +187,17 @@ typedef const struct tms_sequences tms_table[6][6];
 
 static tms_table *tms_seqs = &short_tms_seqs;
 
-int tap_get_tms_path(tap_state_t from, tap_state_t to)
+int tap_get_tms_path(enum tap_state from, enum tap_state to)
 {
 	return (*tms_seqs)[tap_move_ndx(from)][tap_move_ndx(to)].bits;
 }
 
-int tap_get_tms_path_len(tap_state_t from, tap_state_t to)
+int tap_get_tms_path_len(enum tap_state from, enum tap_state to)
 {
 	return (*tms_seqs)[tap_move_ndx(from)][tap_move_ndx(to)].bit_count;
 }
 
-bool tap_is_state_stable(tap_state_t astate)
+bool tap_is_state_stable(enum tap_state astate)
 {
 	bool is_stable;
 
@@ -205,24 +205,24 @@ bool tap_is_state_stable(tap_state_t astate)
 	 * (not value dependent like an array), and can also check bounds.
 	*/
 	switch (astate) {
-		case TAP_RESET:
-		case TAP_IDLE:
-		case TAP_DRSHIFT:
-		case TAP_DRPAUSE:
-		case TAP_IRSHIFT:
-		case TAP_IRPAUSE:
-			is_stable = true;
-			break;
-		default:
-			is_stable = false;
+	case TAP_RESET:
+	case TAP_IDLE:
+	case TAP_DRSHIFT:
+	case TAP_DRPAUSE:
+	case TAP_IRSHIFT:
+	case TAP_IRPAUSE:
+		is_stable = true;
+		break;
+	default:
+		is_stable = false;
 	}
 
 	return is_stable;
 }
 
-tap_state_t tap_state_transition(tap_state_t cur_state, bool tms)
+enum tap_state tap_state_transition(enum tap_state cur_state, bool tms)
 {
-	tap_state_t new_state;
+	enum tap_state new_state;
 
 	/*	A switch is used because it is symbol dependent and not value dependent
 	 * like an array.  Also it can check for out of range conditions.
@@ -230,83 +230,83 @@ tap_state_t tap_state_transition(tap_state_t cur_state, bool tms)
 
 	if (tms) {
 		switch (cur_state) {
-			case TAP_RESET:
-				new_state = cur_state;
-				break;
-			case TAP_IDLE:
-			case TAP_DRUPDATE:
-			case TAP_IRUPDATE:
-				new_state = TAP_DRSELECT;
-				break;
-			case TAP_DRSELECT:
-				new_state = TAP_IRSELECT;
-				break;
-			case TAP_DRCAPTURE:
-			case TAP_DRSHIFT:
-				new_state = TAP_DREXIT1;
-				break;
-			case TAP_DREXIT1:
-			case TAP_DREXIT2:
-				new_state = TAP_DRUPDATE;
-				break;
-			case TAP_DRPAUSE:
-				new_state = TAP_DREXIT2;
-				break;
-			case TAP_IRSELECT:
-				new_state = TAP_RESET;
-				break;
-			case TAP_IRCAPTURE:
-			case TAP_IRSHIFT:
-				new_state = TAP_IREXIT1;
-				break;
-			case TAP_IREXIT1:
-			case TAP_IREXIT2:
-				new_state = TAP_IRUPDATE;
-				break;
-			case TAP_IRPAUSE:
-				new_state = TAP_IREXIT2;
-				break;
-			default:
-				LOG_ERROR("fatal: invalid argument cur_state=%d", cur_state);
-				exit(1);
-				break;
+		case TAP_RESET:
+			new_state = cur_state;
+			break;
+		case TAP_IDLE:
+		case TAP_DRUPDATE:
+		case TAP_IRUPDATE:
+			new_state = TAP_DRSELECT;
+			break;
+		case TAP_DRSELECT:
+			new_state = TAP_IRSELECT;
+			break;
+		case TAP_DRCAPTURE:
+		case TAP_DRSHIFT:
+			new_state = TAP_DREXIT1;
+			break;
+		case TAP_DREXIT1:
+		case TAP_DREXIT2:
+			new_state = TAP_DRUPDATE;
+			break;
+		case TAP_DRPAUSE:
+			new_state = TAP_DREXIT2;
+			break;
+		case TAP_IRSELECT:
+			new_state = TAP_RESET;
+			break;
+		case TAP_IRCAPTURE:
+		case TAP_IRSHIFT:
+			new_state = TAP_IREXIT1;
+			break;
+		case TAP_IREXIT1:
+		case TAP_IREXIT2:
+			new_state = TAP_IRUPDATE;
+			break;
+		case TAP_IRPAUSE:
+			new_state = TAP_IREXIT2;
+			break;
+		default:
+			LOG_ERROR("fatal: invalid argument cur_state=%d", cur_state);
+			exit(1);
+			break;
 		}
 	} else {
 		switch (cur_state) {
-			case TAP_RESET:
-			case TAP_IDLE:
-			case TAP_DRUPDATE:
-			case TAP_IRUPDATE:
-				new_state = TAP_IDLE;
-				break;
-			case TAP_DRSELECT:
-				new_state = TAP_DRCAPTURE;
-				break;
-			case TAP_DRCAPTURE:
-			case TAP_DRSHIFT:
-			case TAP_DREXIT2:
-				new_state = TAP_DRSHIFT;
-				break;
-			case TAP_DREXIT1:
-			case TAP_DRPAUSE:
-				new_state = TAP_DRPAUSE;
-				break;
-			case TAP_IRSELECT:
-				new_state = TAP_IRCAPTURE;
-				break;
-			case TAP_IRCAPTURE:
-			case TAP_IRSHIFT:
-			case TAP_IREXIT2:
-				new_state = TAP_IRSHIFT;
-				break;
-			case TAP_IREXIT1:
-			case TAP_IRPAUSE:
-				new_state = TAP_IRPAUSE;
-				break;
-			default:
-				LOG_ERROR("fatal: invalid argument cur_state=%d", cur_state);
-				exit(1);
-				break;
+		case TAP_RESET:
+		case TAP_IDLE:
+		case TAP_DRUPDATE:
+		case TAP_IRUPDATE:
+			new_state = TAP_IDLE;
+			break;
+		case TAP_DRSELECT:
+			new_state = TAP_DRCAPTURE;
+			break;
+		case TAP_DRCAPTURE:
+		case TAP_DRSHIFT:
+		case TAP_DREXIT2:
+			new_state = TAP_DRSHIFT;
+			break;
+		case TAP_DREXIT1:
+		case TAP_DRPAUSE:
+			new_state = TAP_DRPAUSE;
+			break;
+		case TAP_IRSELECT:
+			new_state = TAP_IRCAPTURE;
+			break;
+		case TAP_IRCAPTURE:
+		case TAP_IRSHIFT:
+		case TAP_IREXIT2:
+			new_state = TAP_IRSHIFT;
+			break;
+		case TAP_IREXIT1:
+		case TAP_IRPAUSE:
+			new_state = TAP_IRPAUSE;
+			break;
+		default:
+			LOG_ERROR("fatal: invalid argument cur_state=%d", cur_state);
+			exit(1);
+			break;
 		}
 	}
 
@@ -341,9 +341,9 @@ static const struct name_mapping {
 	{ TAP_IDLE, "IDLE", },
 };
 
-const char *tap_state_name(tap_state_t state)
+const char *tap_state_name(enum tap_state state)
 {
-	unsigned i;
+	unsigned int i;
 
 	for (i = 0; i < ARRAY_SIZE(tap_name_mapping); i++) {
 		if (tap_name_mapping[i].symbol == state)
@@ -352,9 +352,9 @@ const char *tap_state_name(tap_state_t state)
 	return "???";
 }
 
-tap_state_t tap_state_by_name(const char *name)
+enum tap_state tap_state_by_name(const char *name)
 {
-	unsigned i;
+	unsigned int i;
 
 	for (i = 0; i < ARRAY_SIZE(tap_name_mapping); i++) {
 		/* be nice to the human */
@@ -371,20 +371,20 @@ tap_state_t tap_state_by_name(const char *name)
 	LOG_DEBUG_IO("TAP/SM: %9s -> %5s\tTMS: %s\tTDI: %s", \
 	tap_state_name(a), tap_state_name(b), astr, bstr)
 
-tap_state_t jtag_debug_state_machine_(const void *tms_buf, const void *tdi_buf,
-	unsigned tap_bits, tap_state_t next_state)
+enum tap_state jtag_debug_state_machine_(const void *tms_buf, const void *tdi_buf,
+	unsigned int tap_bits, enum tap_state next_state)
 {
 	const uint8_t *tms_buffer;
 	const uint8_t *tdi_buffer;
-	unsigned tap_bytes;
-	unsigned cur_byte;
-	unsigned cur_bit;
+	unsigned int tap_bytes;
+	unsigned int cur_byte;
+	unsigned int cur_bit;
 
-	unsigned tap_out_bits;
+	unsigned int tap_out_bits;
 	char tms_str[33];
 	char tdi_str[33];
 
-	tap_state_t last_state;
+	enum tap_state last_state;
 
 	/* set startstate (and possibly last, if tap_bits == 0) */
 	last_state = next_state;
@@ -400,7 +400,7 @@ tap_state_t jtag_debug_state_machine_(const void *tms_buf, const void *tdi_buf,
 	for (cur_byte = 0; cur_byte < tap_bytes; cur_byte++) {
 		for (cur_bit = 0; cur_bit < 8; cur_bit++) {
 			/* make sure we do not run off the end of the buffers */
-			unsigned tap_bit = cur_byte * 8 + cur_bit;
+			unsigned int tap_bit = cur_byte * 8 + cur_bit;
 			if (tap_bit == tap_bits)
 				break;
 

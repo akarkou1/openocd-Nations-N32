@@ -92,7 +92,7 @@ struct pic32mx_flash_bank {
  * DEVID values as per PIC32MX Flash Programming Specification Rev N
  */
 
-static const struct pic32mx_devs_s {
+static const struct pic32mx_devs {
 	uint32_t devid;
 	const char *name;
 } pic32mx_devs[] = {
@@ -608,7 +608,7 @@ static int pic32mx_write(struct flash_bank *bank, const uint8_t *buffer, uint32_
 	}
 
 	LOG_DEBUG("writing to flash at address " TARGET_ADDR_FMT " at offset 0x%8.8" PRIx32
-			" count: 0x%8.8" PRIx32 "", bank->base, offset, count);
+			" count: 0x%8.8" PRIx32, bank->base, offset, count);
 
 	if (offset & 0x3) {
 		LOG_WARNING("offset 0x%" PRIx32 "breaks required 4-byte alignment", offset);
@@ -866,10 +866,8 @@ COMMAND_HANDLER(pic32mx_handle_unlock_command)
 	struct mips_ejtag *ejtag_info;
 	int timeout = 10;
 
-	if (CMD_ARGC < 1) {
-		command_print(CMD, "pic32mx unlock <bank>");
+	if (CMD_ARGC != 1)
 		return ERROR_COMMAND_SYNTAX_ERROR;
-	}
 
 	struct flash_bank *bank;
 	int retval = CALL_COMMAND_HANDLER(flash_command_get_bank, 0, &bank);
@@ -902,7 +900,7 @@ COMMAND_HANDLER(pic32mx_handle_unlock_command)
 		mchip_cmd = MCHP_STATUS;
 		mips_ejtag_drscan_8(ejtag_info, &mchip_cmd);
 		if (timeout-- == 0) {
-			LOG_DEBUG("timeout waiting for unlock: 0x%" PRIx8 "", mchip_cmd);
+			LOG_DEBUG("timeout waiting for unlock: 0x%" PRIx8, mchip_cmd);
 			break;
 		}
 		alive_sleep(1);
@@ -932,7 +930,7 @@ static const struct command_registration pic32mx_exec_command_handlers[] = {
 		.name = "unlock",
 		.handler = pic32mx_handle_unlock_command,
 		.mode = COMMAND_EXEC,
-		.usage = "[bank_id]",
+		.usage = "bank_id",
 		.help = "Unlock/Erase entire device.",
 	},
 	COMMAND_REGISTRATION_DONE

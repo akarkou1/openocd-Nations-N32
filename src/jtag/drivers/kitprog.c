@@ -275,7 +275,7 @@ static int kitprog_usb_open(void)
 	const uint16_t vids[] = { VID, 0 };
 	const uint16_t pids[] = { PID, 0 };
 
-	if (jtag_libusb_open(vids, pids, &kitprog_handle->usb_handle, NULL) != ERROR_OK) {
+	if (jtag_libusb_open(vids, pids, NULL, &kitprog_handle->usb_handle, NULL) != ERROR_OK) {
 		LOG_ERROR("Failed to open or find the device");
 		return ERROR_FAIL;
 	}
@@ -414,13 +414,13 @@ static int kitprog_set_protocol(uint8_t protocol)
 	int transferred;
 	char status = PROGRAMMER_NOK_NACK;
 
-	transferred = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
+	int retval = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
 		LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
 		CONTROL_TYPE_WRITE,
 		(CONTROL_MODE_SET_PROGRAMMER_PROTOCOL << 8) | CONTROL_COMMAND_PROGRAM,
-		protocol, &status, 1, 0);
+		protocol, &status, 1, 0, &transferred);
 
-	if (transferred == 0) {
+	if (retval != ERROR_OK || transferred == 0) {
 		LOG_DEBUG("Zero bytes transferred");
 		return ERROR_FAIL;
 	}
@@ -440,11 +440,11 @@ static int kitprog_get_status(void)
 
 	/* Try a maximum of three times */
 	for (int i = 0; (i < 3) && (transferred == 0); i++) {
-		transferred = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
+		jtag_libusb_control_transfer(kitprog_handle->usb_handle,
 			LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
 			CONTROL_TYPE_READ,
 			(CONTROL_MODE_POLL_PROGRAMMER_STATUS << 8) | CONTROL_COMMAND_PROGRAM,
-			0, &status, 1, 0);
+			0, &status, 1, 0, &transferred);
 		jtag_sleep(1000);
 	}
 
@@ -466,13 +466,13 @@ static int kitprog_set_unknown(void)
 	int transferred;
 	char status = PROGRAMMER_NOK_NACK;
 
-	transferred = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
+	int retval = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
 		LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
 		CONTROL_TYPE_WRITE,
 		(0x03 << 8) | 0x04,
-		0, &status, 1, 0);
+		0, &status, 1, 0, &transferred);
 
-	if (transferred == 0) {
+	if (retval != ERROR_OK || transferred == 0) {
 		LOG_DEBUG("Zero bytes transferred");
 		return ERROR_FAIL;
 	}
@@ -491,13 +491,13 @@ static int kitprog_acquire_psoc(uint8_t psoc_type, uint8_t acquire_mode,
 	int transferred;
 	char status = PROGRAMMER_NOK_NACK;
 
-	transferred = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
+	int retval = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
 		LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
 		CONTROL_TYPE_WRITE,
 		(CONTROL_MODE_ACQUIRE_SWD_TARGET << 8) | CONTROL_COMMAND_PROGRAM,
-		(max_attempts << 8) | (acquire_mode << 4) | psoc_type, &status, 1, 0);
+		(max_attempts << 8) | (acquire_mode << 4) | psoc_type, &status, 1, 0, &transferred);
 
-	if (transferred == 0) {
+	if (retval != ERROR_OK || transferred == 0) {
 		LOG_DEBUG("Zero bytes transferred");
 		return ERROR_FAIL;
 	}
@@ -515,13 +515,13 @@ static int kitprog_reset_target(void)
 	int transferred;
 	char status = PROGRAMMER_NOK_NACK;
 
-	transferred = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
+	int retval = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
 		LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
 		CONTROL_TYPE_WRITE,
 		(CONTROL_MODE_RESET_TARGET << 8) | CONTROL_COMMAND_PROGRAM,
-		0, &status, 1, 0);
+		0, &status, 1, 0, &transferred);
 
-	if (transferred == 0) {
+	if (retval != ERROR_OK || transferred == 0) {
 		LOG_DEBUG("Zero bytes transferred");
 		return ERROR_FAIL;
 	}
@@ -539,13 +539,13 @@ static int kitprog_swd_sync(void)
 	int transferred;
 	char status = PROGRAMMER_NOK_NACK;
 
-	transferred = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
+	int retval = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
 		LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
 		CONTROL_TYPE_WRITE,
 		(CONTROL_MODE_SYNCHRONIZE_TRANSFER << 8) | CONTROL_COMMAND_PROGRAM,
-		0, &status, 1, 0);
+		0, &status, 1, 0, &transferred);
 
-	if (transferred == 0) {
+	if (retval != ERROR_OK || transferred == 0) {
 		LOG_DEBUG("Zero bytes transferred");
 		return ERROR_FAIL;
 	}
@@ -563,13 +563,13 @@ static int kitprog_swd_seq(uint8_t seq_type)
 	int transferred;
 	char status = PROGRAMMER_NOK_NACK;
 
-	transferred = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
+	int retval = jtag_libusb_control_transfer(kitprog_handle->usb_handle,
 		LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
 		CONTROL_TYPE_WRITE,
 		(CONTROL_MODE_SEND_SWD_SEQUENCE << 8) | CONTROL_COMMAND_PROGRAM,
-		seq_type, &status, 1, 0);
+		seq_type, &status, 1, 0, &transferred);
 
-	if (transferred == 0) {
+	if (retval != ERROR_OK || transferred == 0) {
 		LOG_DEBUG("Zero bytes transferred");
 		return ERROR_FAIL;
 	}
@@ -646,25 +646,24 @@ static void kitprog_swd_read_reg(uint8_t cmd, uint32_t *value, uint32_t ap_delay
 static int kitprog_swd_switch_seq(enum swd_special_seq seq)
 {
 	switch (seq) {
-		case JTAG_TO_SWD:
-			if (kitprog_handle->supports_jtag_to_swd) {
-				LOG_DEBUG("JTAG to SWD");
-				if (kitprog_swd_seq(SEQUENCE_JTAG_TO_SWD) != ERROR_OK)
-					return ERROR_FAIL;
-				break;
-			} else {
-				LOG_DEBUG("JTAG to SWD not supported");
-				/* Fall through to fix target reset issue */
-			}
-			/* fallthrough */
-		case LINE_RESET:
-			LOG_DEBUG("SWD line reset");
-			if (kitprog_swd_seq(SEQUENCE_LINE_RESET) != ERROR_OK)
+	case JTAG_TO_SWD:
+		if (kitprog_handle->supports_jtag_to_swd) {
+			LOG_DEBUG("JTAG to SWD");
+			if (kitprog_swd_seq(SEQUENCE_JTAG_TO_SWD) != ERROR_OK)
 				return ERROR_FAIL;
 			break;
-		default:
-			LOG_ERROR("Sequence %d not supported.", seq);
+		}
+		LOG_DEBUG("JTAG to SWD not supported");
+		/* Fall through to fix target reset issue */
+		/* fallthrough */
+	case LINE_RESET:
+		LOG_DEBUG("SWD line reset");
+		if (kitprog_swd_seq(SEQUENCE_LINE_RESET) != ERROR_OK)
 			return ERROR_FAIL;
+		break;
+	default:
+		LOG_ERROR("Sequence %d not supported.", seq);
+		return ERROR_FAIL;
 	}
 
 	return ERROR_OK;
@@ -782,7 +781,7 @@ static int kitprog_swd_run_queue(void)
 			if (ack != SWD_ACK_OK || (buffer[read_index] & 0x08)) {
 				LOG_DEBUG("SWD ack not OK: %d %s", i,
 					  ack == SWD_ACK_WAIT ? "WAIT" : ack == SWD_ACK_FAULT ? "FAULT" : "JUNK");
-				queued_retval = ack == SWD_ACK_WAIT ? ERROR_WAIT : ERROR_FAIL;
+				queued_retval = swd_ack_to_error_code(ack);
 				break;
 			}
 			read_index++;
@@ -879,6 +878,13 @@ static const struct command_registration kitprog_subcommand_handlers[] = {
 		.usage = "",
 		.help = "try to acquire a PSoC",
 	},
+	{
+		.name = "init_acquire_psoc",
+		.handler = &kitprog_handle_init_acquire_psoc_command,
+		.mode = COMMAND_CONFIG,
+		.help = "try to acquire a PSoC during init",
+		.usage = "",
+	},
 	COMMAND_REGISTRATION_DONE
 };
 
@@ -889,13 +895,6 @@ static const struct command_registration kitprog_command_handlers[] = {
 		.help = "perform KitProg management",
 		.usage = "<cmd>",
 		.chain = kitprog_subcommand_handlers,
-	},
-	{
-		.name = "kitprog_init_acquire_psoc",
-		.handler = &kitprog_handle_init_acquire_psoc_command,
-		.mode = COMMAND_CONFIG,
-		.help = "try to acquire a PSoC during init",
-		.usage = "",
 	},
 	COMMAND_REGISTRATION_DONE
 };
@@ -908,11 +907,10 @@ static const struct swd_driver kitprog_swd = {
 	.run = kitprog_swd_run_queue,
 };
 
-static const char * const kitprog_transports[] = { "swd", NULL };
-
 struct adapter_driver kitprog_adapter_driver = {
 	.name = "kitprog",
-	.transports = kitprog_transports,
+	.transport_ids = TRANSPORT_SWD,
+	.transport_preferred_id = TRANSPORT_SWD,
 	.commands = kitprog_command_handlers,
 
 	.init = kitprog_init,

@@ -286,13 +286,13 @@ static uint8_t dtc_entry_download;
 static int dtc_load_from_buffer(struct libusb_device_handle *hdev_param, const uint8_t *buffer,
 		size_t length)
 {
-	struct header_s {
+	struct header {
 		uint8_t type;
 		uint8_t length;
 	};
 
 	int usb_err;
-	struct header_s *header;
+	struct header *header;
 	uint8_t lut_start = 0xc0;
 
 	dtc_entry_download = 0;
@@ -311,7 +311,7 @@ static int dtc_load_from_buffer(struct libusb_device_handle *hdev_param, const u
 			exit(1);
 		}
 
-		header = (struct header_s *)buffer;
+		header = (struct header *)buffer;
 		buffer += sizeof(*header);
 		length -= sizeof(*header);
 
@@ -321,67 +321,53 @@ static int dtc_load_from_buffer(struct libusb_device_handle *hdev_param, const u
 		}
 
 		switch (header->type) {
-			case DTCLOAD_COMMENT:
-				break;
+		case DTCLOAD_COMMENT:
+			break;
 
-			case DTCLOAD_ENTRY:
-				/* store entry addresses somewhere */
-				if (!strncmp("download", (char *)buffer + 1, 8))
-					dtc_entry_download = buffer[0];
-				break;
+		case DTCLOAD_ENTRY:
+			/* store entry addresses somewhere */
+			if (!strncmp("download", (char *)buffer + 1, 8))
+				dtc_entry_download = buffer[0];
+			break;
 
-			case DTCLOAD_LOAD:
-				/* Send the DTC program to ST7 RAM. */
-				usb_err = ep1_memory_write(
-						hdev_param,
-						DTC_LOAD_BUFFER,
-						header->length + 1, buffer
-					);
-				if (usb_err < 0)
-					return usb_err;
+		case DTCLOAD_LOAD:
+			/* Send the DTC program to ST7 RAM. */
+			usb_err = ep1_memory_write(hdev_param, DTC_LOAD_BUFFER,
+				header->length + 1, buffer);
+			if (usb_err < 0)
+				return usb_err;
 
-				/* Load it into the DTC. */
-				usb_err = ep1_generic_commandl(
-						hdev_param, 3,
-						EP1_CMD_DTC_LOAD,
-						(DTC_LOAD_BUFFER >> 8),
-						DTC_LOAD_BUFFER
-					);
-				if (usb_err < 0)
-					return usb_err;
+			/* Load it into the DTC. */
+			usb_err = ep1_generic_commandl(hdev_param, 3, EP1_CMD_DTC_LOAD,
+				(DTC_LOAD_BUFFER >> 8),	DTC_LOAD_BUFFER);
+			if (usb_err < 0)
+				return usb_err;
 
-				break;
+			break;
 
-			case DTCLOAD_RUN:
-				usb_err = ep1_generic_commandl(
-						hdev_param, 3,
-						EP1_CMD_DTC_CALL,
-						buffer[0],
-						EP1_CMD_DTC_WAIT
-					);
-				if (usb_err < 0)
-					return usb_err;
+		case DTCLOAD_RUN:
+			usb_err = ep1_generic_commandl(hdev_param, 3, EP1_CMD_DTC_CALL,
+				buffer[0], EP1_CMD_DTC_WAIT);
+			if (usb_err < 0)
+				return usb_err;
 
-				break;
+			break;
 
-			case DTCLOAD_LUT_START:
-				lut_start = buffer[0];
-				break;
+		case DTCLOAD_LUT_START:
+			lut_start = buffer[0];
+			break;
 
-			case DTCLOAD_LUT:
-				usb_err = ep1_memory_write(
-						hdev_param,
-						ST7_USB_BUF_EP0OUT + lut_start,
-						header->length + 1, buffer
-					);
-				if (usb_err < 0)
-					return usb_err;
-				break;
+		case DTCLOAD_LUT:
+			usb_err = ep1_memory_write(hdev_param,
+				ST7_USB_BUF_EP0OUT + lut_start, header->length + 1, buffer);
+			if (usb_err < 0)
+				return usb_err;
+			break;
 
-			default:
-				LOG_ERROR("Invalid DTC image record type: 0x%02x", header->type);
-				exit(1);
-				break;
+		default:
+			LOG_ERROR("Invalid DTC image record type: 0x%02x", header->type);
+			exit(1);
+			break;
 		}
 
 		buffer += (header->length + 1);
@@ -632,7 +618,7 @@ static int dtc_queue_run(void)
 	uint8_t dtc_mask, tdo_mask;
 	uint8_t reply_buffer[USB_EP2IN_SIZE];
 
-	assert((dtc_queue.rq_head != 0) == (dtc_queue.reply_index > 0));
+	assert((!!dtc_queue.rq_head) == (dtc_queue.reply_index > 0));
 	assert(dtc_queue.cmd_index < USB_EP2BANK_SIZE);
 	assert(dtc_queue.reply_index <= USB_EP2IN_SIZE);
 
@@ -842,7 +828,7 @@ static int tap_state_queue_append(uint8_t tms)
 	return 0;
 }
 
-static void rlink_end_state(tap_state_t state)
+static void rlink_end_state(enum tap_state state)
 {
 	if (tap_is_state_stable(state))
 		tap_set_end_state(state);
@@ -869,7 +855,7 @@ static void rlink_state_move(void)
 
 static void rlink_path_move(struct pathmove_command *cmd)
 {
-	int num_states = cmd->num_states;
+	unsigned int num_states = cmd->num_states;
 	int state_count;
 	int tms = 0;
 
@@ -896,11 +882,9 @@ static void rlink_path_move(struct pathmove_command *cmd)
 	tap_set_end_state(tap_get_state());
 }
 
-static void rlink_runtest(int num_cycles)
+static void rlink_runtest(unsigned int num_cycles)
 {
-	int i;
-
-	tap_state_t saved_end_state = tap_get_end_state();
+	enum tap_state saved_end_state = tap_get_end_state();
 
 	/* only do a state_move when we're not already in RTI */
 	if (tap_get_state() != TAP_IDLE) {
@@ -909,7 +893,7 @@ static void rlink_runtest(int num_cycles)
 	}
 
 	/* execute num_cycles */
-	for (i = 0; i < num_cycles; i++)
+	for (unsigned int i = 0; i < num_cycles; i++)
 		tap_state_queue_append(0);
 
 	/* finish in end_state */
@@ -1021,7 +1005,7 @@ static int rlink_scan(struct jtag_command *cmd, enum scan_type type,
 		uint8_t *buffer, int scan_size)
 {
 	bool ir_scan;
-	tap_state_t saved_end_state;
+	enum tap_state saved_end_state;
 	int byte_bits;
 	int extra_bits;
 	int chunk_bits;
@@ -1149,15 +1133,15 @@ static int rlink_scan(struct jtag_command *cmd, enum scan_type type,
 		chunk_bytes = chunk_bits / 8;
 
 		switch (type) {
-			case SCAN_IN:
-				x = DTC_CMD_SHIFT_TDO_BYTES(chunk_bytes);
-				break;
-			case SCAN_OUT:
-				x = DTC_CMD_SHIFT_TDI_BYTES(chunk_bytes);
-				break;
-			default:
-				x = DTC_CMD_SHIFT_TDIO_BYTES(chunk_bytes);
-				break;
+		case SCAN_IN:
+			x = DTC_CMD_SHIFT_TDO_BYTES(chunk_bytes);
+			break;
+		case SCAN_OUT:
+			x = DTC_CMD_SHIFT_TDI_BYTES(chunk_bytes);
+			break;
+		default:
+			x = DTC_CMD_SHIFT_TDIO_BYTES(chunk_bytes);
+			break;
 		}
 		dtc_queue.cmd_buffer[dtc_queue.cmd_index++] = x;
 
@@ -1262,9 +1246,9 @@ static int rlink_scan(struct jtag_command *cmd, enum scan_type type,
 	return 0;
 }
 
-static int rlink_execute_queue(void)
+static int rlink_execute_queue(struct jtag_command *cmd_queue)
 {
-	struct jtag_command *cmd = jtag_command_queue;	/* currently processed command */
+	struct jtag_command *cmd = cmd_queue;	/* currently processed command */
 	int scan_size;
 	enum scan_type type;
 	uint8_t *buffer;
@@ -1283,69 +1267,69 @@ static int rlink_execute_queue(void)
 
 	while (cmd) {
 		switch (cmd->type) {
-			case JTAG_RUNTEST:
-			case JTAG_TLR_RESET:
-			case JTAG_PATHMOVE:
-			case JTAG_SCAN:
-				break;
+		case JTAG_RUNTEST:
+		case JTAG_TLR_RESET:
+		case JTAG_PATHMOVE:
+		case JTAG_SCAN:
+			break;
 
-			default:
-				/* some events, such as resets, need a queue flush to ensure
-				 *consistency */
-				tap_state_queue_run();
-				dtc_queue_run();
-				break;
+		default:
+			/* some events, such as resets, need a queue flush to ensure
+			 *consistency */
+			tap_state_queue_run();
+			dtc_queue_run();
+			break;
 		}
 
 		switch (cmd->type) {
-			case JTAG_RESET:
-				LOG_DEBUG_IO("reset trst: %i srst %i",
-						cmd->cmd.reset->trst,
-						cmd->cmd.reset->srst);
-				if ((cmd->cmd.reset->trst == 1) ||
-						(cmd->cmd.reset->srst &&
-								(jtag_get_reset_config() & RESET_SRST_PULLS_TRST)))
-					tap_set_state(TAP_RESET);
-				rlink_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
-				break;
-			case JTAG_RUNTEST:
-				LOG_DEBUG_IO("runtest %i cycles, end in %i",
-						cmd->cmd.runtest->num_cycles,
-						cmd->cmd.runtest->end_state);
-				if (cmd->cmd.runtest->end_state != -1)
-					rlink_end_state(cmd->cmd.runtest->end_state);
-				rlink_runtest(cmd->cmd.runtest->num_cycles);
-				break;
-			case JTAG_TLR_RESET:
-				LOG_DEBUG_IO("statemove end in %i", cmd->cmd.statemove->end_state);
-				if (cmd->cmd.statemove->end_state != -1)
-					rlink_end_state(cmd->cmd.statemove->end_state);
-				rlink_state_move();
-				break;
-			case JTAG_PATHMOVE:
-				LOG_DEBUG_IO("pathmove: %i states, end in %i",
-						cmd->cmd.pathmove->num_states,
-						cmd->cmd.pathmove->path[cmd->cmd.pathmove->num_states - 1]);
-				rlink_path_move(cmd->cmd.pathmove);
-				break;
-			case JTAG_SCAN:
-				LOG_DEBUG_IO("%s scan end in %i",
-						(cmd->cmd.scan->ir_scan) ? "IR" : "DR",
-								cmd->cmd.scan->end_state);
-				if (cmd->cmd.scan->end_state != -1)
-					rlink_end_state(cmd->cmd.scan->end_state);
-				scan_size = jtag_build_buffer(cmd->cmd.scan, &buffer);
-				type = jtag_scan_type(cmd->cmd.scan);
-				if (rlink_scan(cmd, type, buffer, scan_size) != ERROR_OK)
-					retval = ERROR_FAIL;
-				break;
-			case JTAG_SLEEP:
-				LOG_DEBUG_IO("sleep %" PRIu32, cmd->cmd.sleep->us);
-				jtag_sleep(cmd->cmd.sleep->us);
-				break;
-			default:
-				LOG_ERROR("BUG: unknown JTAG command type encountered");
-				exit(-1);
+		case JTAG_RESET:
+			LOG_DEBUG_IO("reset trst: %i srst %i",
+					cmd->cmd.reset->trst,
+					cmd->cmd.reset->srst);
+			if (cmd->cmd.reset->trst == 1 ||
+					(cmd->cmd.reset->srst &&
+							(jtag_get_reset_config() & RESET_SRST_PULLS_TRST)))
+				tap_set_state(TAP_RESET);
+			rlink_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
+			break;
+		case JTAG_RUNTEST:
+			LOG_DEBUG_IO("runtest %i cycles, end in %i",
+					cmd->cmd.runtest->num_cycles,
+					cmd->cmd.runtest->end_state);
+			if (cmd->cmd.runtest->end_state != -1)
+				rlink_end_state(cmd->cmd.runtest->end_state);
+			rlink_runtest(cmd->cmd.runtest->num_cycles);
+			break;
+		case JTAG_TLR_RESET:
+			LOG_DEBUG_IO("statemove end in %i", cmd->cmd.statemove->end_state);
+			if (cmd->cmd.statemove->end_state != -1)
+				rlink_end_state(cmd->cmd.statemove->end_state);
+			rlink_state_move();
+			break;
+		case JTAG_PATHMOVE:
+			LOG_DEBUG_IO("pathmove: %u states, end in %i",
+					cmd->cmd.pathmove->num_states,
+					cmd->cmd.pathmove->path[cmd->cmd.pathmove->num_states - 1]);
+			rlink_path_move(cmd->cmd.pathmove);
+			break;
+		case JTAG_SCAN:
+			LOG_DEBUG_IO("%s scan end in %i",
+					(cmd->cmd.scan->ir_scan) ? "IR" : "DR",
+							cmd->cmd.scan->end_state);
+			if (cmd->cmd.scan->end_state != -1)
+				rlink_end_state(cmd->cmd.scan->end_state);
+			scan_size = jtag_build_buffer(cmd->cmd.scan, &buffer);
+			type = jtag_scan_type(cmd->cmd.scan);
+			if (rlink_scan(cmd, type, buffer, scan_size) != ERROR_OK)
+				retval = ERROR_FAIL;
+			break;
+		case JTAG_SLEEP:
+			LOG_DEBUG_IO("sleep %" PRIu32, cmd->cmd.sleep->us);
+			jtag_sleep(cmd->cmd.sleep->us);
+			break;
+		default:
+			LOG_ERROR("BUG: unknown JTAG command type encountered");
+			exit(-1);
 		}
 		cmd = cmd->next;
 	}
@@ -1448,7 +1432,7 @@ static int rlink_init(void)
 
 	const uint16_t vids[] = { USB_IDVENDOR, 0 };
 	const uint16_t pids[] = { USB_IDPRODUCT, 0 };
-	if (jtag_libusb_open(vids, pids, &hdev, NULL) != ERROR_OK)
+	if (jtag_libusb_open(vids, pids, NULL, &hdev, NULL) != ERROR_OK)
 		return ERROR_FAIL;
 
 	struct libusb_device_descriptor descriptor;
@@ -1677,7 +1661,8 @@ static struct jtag_interface rlink_interface = {
 
 struct adapter_driver rlink_adapter_driver = {
 	.name = "rlink",
-	.transports = jtag_only,
+	.transport_ids = TRANSPORT_JTAG,
+	.transport_preferred_id = TRANSPORT_JTAG,
 
 	.init = rlink_init,
 	.quit = rlink_quit,

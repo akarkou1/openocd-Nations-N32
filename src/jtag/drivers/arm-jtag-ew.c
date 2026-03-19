@@ -42,10 +42,10 @@ static uint8_t usb_in_buffer[ARMJTAGEW_IN_BUFFER_SIZE];
 static uint8_t usb_out_buffer[ARMJTAGEW_OUT_BUFFER_SIZE];
 
 /* Queue command functions */
-static void armjtagew_end_state(tap_state_t state);
+static void armjtagew_end_state(enum tap_state state);
 static void armjtagew_state_move(void);
-static void armjtagew_path_move(int num_states, tap_state_t *path);
-static void armjtagew_runtest(int num_cycles);
+static void armjtagew_path_move(unsigned int num_states, enum tap_state *path);
+static void armjtagew_runtest(unsigned int num_cycles);
 static void armjtagew_scan(bool ir_scan,
 		enum scan_type type,
 		uint8_t *buffer,
@@ -76,87 +76,84 @@ static int armjtagew_usb_read(struct armjtagew *armjtagew, int exp_in_length);
 /* helper functions */
 static int armjtagew_get_version_info(void);
 
-#ifdef _DEBUG_USB_COMMS_
 static void armjtagew_debug_buffer(uint8_t *buffer, int length);
-#endif
 
 static struct armjtagew *armjtagew_handle;
 
 /**************************************************************************
  * External interface implementation */
 
-static int armjtagew_execute_queue(void)
+static int armjtagew_execute_queue(struct jtag_command *cmd_queue)
 {
-	struct jtag_command *cmd = jtag_command_queue;
+	struct jtag_command *cmd = cmd_queue;
 	int scan_size;
 	enum scan_type type;
 	uint8_t *buffer;
 
 	while (cmd) {
 		switch (cmd->type) {
-			case JTAG_RUNTEST:
-				LOG_DEBUG_IO("runtest %i cycles, end in %i",
-						cmd->cmd.runtest->num_cycles,
-						cmd->cmd.runtest->end_state);
+		case JTAG_RUNTEST:
+			LOG_DEBUG_IO("runtest %u cycles, end in %i",
+					cmd->cmd.runtest->num_cycles,
+					cmd->cmd.runtest->end_state);
 
-				armjtagew_end_state(cmd->cmd.runtest->end_state);
-				armjtagew_runtest(cmd->cmd.runtest->num_cycles);
-				break;
+			armjtagew_end_state(cmd->cmd.runtest->end_state);
+			armjtagew_runtest(cmd->cmd.runtest->num_cycles);
+			break;
 
-			case JTAG_TLR_RESET:
-				LOG_DEBUG_IO("statemove end in %i", cmd->cmd.statemove->end_state);
+		case JTAG_TLR_RESET:
+			LOG_DEBUG_IO("statemove end in %i", cmd->cmd.statemove->end_state);
 
-				armjtagew_end_state(cmd->cmd.statemove->end_state);
-				armjtagew_state_move();
-				break;
+			armjtagew_end_state(cmd->cmd.statemove->end_state);
+			armjtagew_state_move();
+			break;
 
-			case JTAG_PATHMOVE:
-				LOG_DEBUG_IO("pathmove: %i states, end in %i",
-						cmd->cmd.pathmove->num_states,
-						cmd->cmd.pathmove->path[cmd->cmd.pathmove->num_states - 1]);
+		case JTAG_PATHMOVE:
+			LOG_DEBUG_IO("pathmove: %u states, end in %i",
+					cmd->cmd.pathmove->num_states,
+					cmd->cmd.pathmove->path[cmd->cmd.pathmove->num_states - 1]);
 
-				armjtagew_path_move(cmd->cmd.pathmove->num_states,
-						cmd->cmd.pathmove->path);
-				break;
+			armjtagew_path_move(cmd->cmd.pathmove->num_states,
+					cmd->cmd.pathmove->path);
+			break;
 
-			case JTAG_SCAN:
-				LOG_DEBUG_IO("scan end in %i", cmd->cmd.scan->end_state);
+		case JTAG_SCAN:
+			LOG_DEBUG_IO("scan end in %i", cmd->cmd.scan->end_state);
 
-				armjtagew_end_state(cmd->cmd.scan->end_state);
+			armjtagew_end_state(cmd->cmd.scan->end_state);
 
-				scan_size = jtag_build_buffer(cmd->cmd.scan, &buffer);
-				LOG_DEBUG_IO("scan input, length = %d", scan_size);
+			scan_size = jtag_build_buffer(cmd->cmd.scan, &buffer);
+			LOG_DEBUG_IO("scan input, length = %d", scan_size);
 
-#ifdef _DEBUG_USB_COMMS_
-				armjtagew_debug_buffer(buffer, (scan_size + 7) / 8);
-#endif
-				type = jtag_scan_type(cmd->cmd.scan);
-				armjtagew_scan(cmd->cmd.scan->ir_scan,
-						type, buffer,
-						scan_size, cmd->cmd.scan);
-				break;
+			armjtagew_debug_buffer(buffer, (scan_size + 7) / 8);
 
-			case JTAG_RESET:
-				LOG_DEBUG_IO("reset trst: %i srst %i",
-						cmd->cmd.reset->trst,
-						cmd->cmd.reset->srst);
+			type = jtag_scan_type(cmd->cmd.scan);
+			armjtagew_scan(cmd->cmd.scan->ir_scan,
+					type, buffer,
+					scan_size, cmd->cmd.scan);
+			break;
 
-				armjtagew_tap_execute();
+		case JTAG_RESET:
+			LOG_DEBUG_IO("reset trst: %i srst %i",
+					cmd->cmd.reset->trst,
+					cmd->cmd.reset->srst);
 
-				if (cmd->cmd.reset->trst == 1)
-					tap_set_state(TAP_RESET);
-				armjtagew_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
-				break;
+			armjtagew_tap_execute();
 
-			case JTAG_SLEEP:
-				LOG_DEBUG_IO("sleep %" PRIu32, cmd->cmd.sleep->us);
-				armjtagew_tap_execute();
-				jtag_sleep(cmd->cmd.sleep->us);
-				break;
+			if (cmd->cmd.reset->trst == 1)
+				tap_set_state(TAP_RESET);
+			armjtagew_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
+			break;
 
-			default:
-				LOG_ERROR("BUG: unknown JTAG command type encountered");
-				exit(-1);
+		case JTAG_SLEEP:
+			LOG_DEBUG_IO("sleep %" PRIu32, cmd->cmd.sleep->us);
+			armjtagew_tap_execute();
+			jtag_sleep(cmd->cmd.sleep->us);
+			break;
+
+		default:
+			LOG_ERROR("BUG: unknown JTAG command type encountered");
+			exit(-1);
 		}
 		cmd = cmd->next;
 	}
@@ -213,7 +210,7 @@ static int armjtagew_init(void)
 
 	armjtagew_handle = armjtagew_usb_open();
 
-	if (armjtagew_handle == 0) {
+	if (!armjtagew_handle) {
 		LOG_ERROR(
 			"Cannot find ARM-JTAG-EW Interface! Please check connection and permissions.");
 		return ERROR_JTAG_INIT_FAILED;
@@ -253,7 +250,7 @@ static int armjtagew_quit(void)
 /**************************************************************************
  * Queue command implementations */
 
-static void armjtagew_end_state(tap_state_t state)
+static void armjtagew_end_state(enum tap_state state)
 {
 	if (tap_is_state_stable(state))
 		tap_set_end_state(state);
@@ -279,11 +276,9 @@ static void armjtagew_state_move(void)
 	tap_set_state(tap_get_end_state());
 }
 
-static void armjtagew_path_move(int num_states, tap_state_t *path)
+static void armjtagew_path_move(unsigned int num_states, enum tap_state *path)
 {
-	int i;
-
-	for (i = 0; i < num_states; i++) {
+	for (unsigned int i = 0; i < num_states; i++) {
 		/*
 		 * TODO: The ARM-JTAG-EW hardware delays TDI with 3 TCK cycles when in RTCK mode.
 		 * Either handle that here, or update the documentation with examples
@@ -305,11 +300,9 @@ static void armjtagew_path_move(int num_states, tap_state_t *path)
 	tap_set_end_state(tap_get_state());
 }
 
-static void armjtagew_runtest(int num_cycles)
+static void armjtagew_runtest(unsigned int num_cycles)
 {
-	int i;
-
-	tap_state_t saved_end_state = tap_get_end_state();
+	enum tap_state saved_end_state = tap_get_end_state();
 
 	/* only do a state_move when we're not already in IDLE */
 	if (tap_get_state() != TAP_IDLE) {
@@ -318,7 +311,7 @@ static void armjtagew_runtest(int num_cycles)
 	}
 
 	/* execute num_cycles */
-	for (i = 0; i < num_cycles; i++)
+	for (unsigned int i = 0; i < num_cycles; i++)
 		armjtagew_tap_append_step(0, 0);
 
 	/* finish in end_state */
@@ -333,7 +326,7 @@ static void armjtagew_scan(bool ir_scan,
 	int scan_size,
 	struct scan_command *command)
 {
-	tap_state_t saved_end_state;
+	enum tap_state saved_end_state;
 
 	armjtagew_tap_ensure_space(1, scan_size + 8);
 
@@ -490,7 +483,8 @@ static struct jtag_interface armjtagew_interface = {
 
 struct adapter_driver armjtagew_adapter_driver = {
 	.name = "arm-jtag-ew",
-	.transports = jtag_only,
+	.transport_ids = TRANSPORT_JTAG,
+	.transport_preferred_id = TRANSPORT_JTAG,
 	.commands = armjtagew_command_handlers,
 
 	.init = armjtagew_init,
@@ -644,9 +638,7 @@ static int armjtagew_tap_execute(void)
 
 				LOG_DEBUG_IO("pending scan result, length = %d", length);
 
-#ifdef _DEBUG_USB_COMMS_
 				armjtagew_debug_buffer(buffer, byte_length);
-#endif
 
 				if (jtag_read_buffer(buffer, command) != ERROR_OK) {
 					armjtagew_tap_init();
@@ -677,7 +669,7 @@ static struct armjtagew *armjtagew_usb_open(void)
 	const uint16_t pids[] = { USB_PID, 0 };
 	struct libusb_device_handle *dev;
 
-	if (jtag_libusb_open(vids, pids, &dev, NULL) != ERROR_OK)
+	if (jtag_libusb_open(vids, pids, NULL, &dev, NULL) != ERROR_OK)
 		return NULL;
 
 	struct armjtagew *result = malloc(sizeof(struct armjtagew));
@@ -746,9 +738,8 @@ static int armjtagew_usb_write(struct armjtagew *armjtagew, int out_length)
 
 	LOG_DEBUG_IO("armjtagew_usb_write, out_length = %d, result = %d", out_length, result);
 
-#ifdef _DEBUG_USB_COMMS_
 	armjtagew_debug_buffer(usb_out_buffer, out_length);
-#endif
+
 	if (result != ERROR_OK)
 		return -1;
 	return transferred;
@@ -763,29 +754,29 @@ static int armjtagew_usb_read(struct armjtagew *armjtagew, int exp_in_length)
 
 	LOG_DEBUG_IO("armjtagew_usb_read, result = %d", result);
 
-#ifdef _DEBUG_USB_COMMS_
 	armjtagew_debug_buffer(usb_in_buffer, result);
-#endif
+
 	if (result != ERROR_OK)
 		return -1;
 	return transferred;
 }
 
-#ifdef _DEBUG_USB_COMMS_
 #define BYTES_PER_LINE  16
 
 static void armjtagew_debug_buffer(uint8_t *buffer, int length)
 {
+	if (!LOG_LEVEL_IS(LOG_LVL_DEBUG_USB))
+		return;
+
 	char line[8 + 3 * BYTES_PER_LINE + 1];
 
 	for (int i = 0; i < length; i += BYTES_PER_LINE) {
 		int n = snprintf(line, 9, "%04x", i);
 		for (int j = i; j < i + BYTES_PER_LINE && j < length; j++)
 			n += snprintf(line + n, 4, " %02x", buffer[j]);
-		LOG_DEBUG("%s", line);
+		LOG_DEBUG_USB("%s", line);
 
 		/* Prevent GDB timeout (writing to log might take some time) */
 		keep_alive();
 	}
 }
-#endif

@@ -140,8 +140,8 @@ int rtt_start(void)
 				addr);
 			rtt.ctrl.address = addr;
 		} else {
-			LOG_INFO("rtt: No control block found");
-			return ERROR_OK;
+			LOG_ERROR("rtt: No control block found");
+			return ERROR_FAIL;
 		}
 	}
 
@@ -288,18 +288,13 @@ int rtt_set_polling_interval(unsigned int interval)
 int rtt_write_channel(unsigned int channel_index, const uint8_t *buffer,
 		size_t *length)
 {
-	if (channel_index >= rtt.ctrl.num_up_channels) {
+	if (channel_index >= rtt.ctrl.num_down_channels) {
 		LOG_WARNING("rtt: Down-channel %u is not available", channel_index);
 		return ERROR_OK;
 	}
 
 	return rtt.source.write(rtt.target, &rtt.ctrl, channel_index, buffer,
 		length, NULL);
-}
-
-bool rtt_started(void)
-{
-	return rtt.started;
 }
 
 bool rtt_configured(void)

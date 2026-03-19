@@ -19,8 +19,10 @@
 
 /*
  * According to:
- * "Semihosting for AArch32 and AArch64, Release 2.0"
- * https://static.docs.arm.com/100863/0200/semihosting.pdf
+ * "Semihosting for AArch32 and AArch64, 2025Q1"
+ * https://github.com/ARM-software/abi-aa/releases/download/2025Q1/semihosting.pdf
+ * and to:
+ * https://developer.arm.com/documentation/dui0203/latest/semihosting/about-semihosting/the-semihosting-interface
  * from ARM Ltd.
  *
  * The available semihosting operation numbers passed in R0 are allocated
@@ -65,6 +67,8 @@ enum semihosting_operation_numbers {
 	SEMIHOSTING_SYS_WRITE = 0x05,
 	SEMIHOSTING_SYS_WRITEC = 0x03,
 	SEMIHOSTING_SYS_WRITE0 = 0x04,
+	SEMIHOSTING_ARM_RESERVED_START = 0x32,
+	SEMIHOSTING_ARM_RESERVED_END = 0xFF,
 	SEMIHOSTING_USER_CMD_0X100 = 0x100, /* First user cmd op code */
 	SEMIHOSTING_USER_CMD_0X107 = 0x107, /* Last supported user cmd op code */
 	SEMIHOSTING_USER_CMD_0X1FF = 0x1FF, /* Last user cmd op code */
@@ -193,12 +197,7 @@ int semihosting_common(struct target *target);
 /* utility functions which may also be used by semihosting extensions (custom vendor-defined syscalls) */
 int semihosting_read_fields(struct target *target, size_t number,
 	uint8_t *fields);
-int semihosting_write_fields(struct target *target, size_t number,
-	uint8_t *fields);
 uint64_t semihosting_get_field(struct target *target, size_t index,
-	uint8_t *fields);
-void semihosting_set_field(struct target *target, uint64_t value,
-	size_t index,
 	uint8_t *fields);
 
 extern const struct command_registration semihosting_common_handlers[];

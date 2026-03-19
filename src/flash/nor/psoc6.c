@@ -18,7 +18,6 @@
 #include "target/target.h"
 #include "target/cortex_m.h"
 #include "target/breakpoints.h"
-#include "target/target_type.h"
 #include "target/algorithm.h"
 
 /**************************************************************************************************
@@ -224,6 +223,8 @@ static int ipc_poll_lock_stat(struct target *target, uint32_t ipc_id, bool lock_
 {
 	int hr;
 	uint32_t reg_val;
+	struct armv7m_common *armv7m = target_to_armv7m(target);
+	bool is_cm0 = (armv7m->arm.arch == ARM_ARCH_V6M);
 
 	struct timeout to;
 	timeout_init(&to, IPC_TIMEOUT_MS);
@@ -245,7 +246,7 @@ static int ipc_poll_lock_stat(struct target *target, uint32_t ipc_id, bool lock_
 			return ERROR_OK;
 	}
 
-	if (target->coreid) {
+	if (!is_cm0) {
 		LOG_WARNING("SROM API calls via CM4 target are supported on single-core PSoC6 devices only. "
 			"Please perform all Flash-related operations via CM0+ target on dual-core devices.");
 	}
@@ -419,17 +420,17 @@ static int psoc6_protect_check(struct flash_bank *bank)
 		return hr;
 
 	switch (psoc6_info->protection) {
-		case PROTECTION_VIRGIN:
-		case PROTECTION_NORMAL:
-			is_protected = 0;
-			break;
+	case PROTECTION_VIRGIN:
+	case PROTECTION_NORMAL:
+		is_protected = 0;
+		break;
 
-		case PROTECTION_UNKNOWN:
-		case PROTECTION_SECURE:
-		case PROTECTION_DEAD:
-		default:
-			is_protected = 1;
-			break;
+	case PROTECTION_UNKNOWN:
+	case PROTECTION_SECURE:
+	case PROTECTION_DEAD:
+	default:
+		is_protected = 1;
+		break;
 	}
 
 	for (unsigned int i = 0; i < bank->num_sectors; i++)
@@ -462,17 +463,17 @@ static int psoc6_protect(struct flash_bank *bank, int set, unsigned int first,
 static const char *protection_to_str(uint8_t protection)
 {
 	switch (protection) {
-		case PROTECTION_VIRGIN:
-			return "VIRGIN";
-		case PROTECTION_NORMAL:
-			return "NORMAL";
-		case PROTECTION_SECURE:
-			return "SECURE";
-		case PROTECTION_DEAD:
-			return "DEAD";
-		case PROTECTION_UNKNOWN:
-		default:
-			return "UNKNOWN";
+	case PROTECTION_VIRGIN:
+		return "VIRGIN";
+	case PROTECTION_NORMAL:
+		return "NORMAL";
+	case PROTECTION_SECURE:
+		return "SECURE";
+	case PROTECTION_DEAD:
+		return "DEAD";
+	case PROTECTION_UNKNOWN:
+	default:
+		return "UNKNOWN";
 	}
 }
 
@@ -486,7 +487,7 @@ static int psoc6_get_info(struct flash_bank *bank, struct command_invocation *cm
 {
 	struct psoc6_target_info *psoc6_info = bank->driver_priv;
 
-	if (psoc6_info->is_probed == false)
+	if (!psoc6_info->is_probed)
 		return ERROR_FAIL;
 
 	int hr = get_silicon_id(bank->target, &psoc6_info->silicon_id, &psoc6_info->protection);
@@ -887,7 +888,8 @@ static int handle_reset_halt(struct target *target)
 {
 	int hr;
 	uint32_t reset_addr;
-	bool is_cm0 = (target->coreid == 0);
+	struct armv7m_common *armv7m = target_to_armv7m(target);
+	bool is_cm0 = (armv7m->arm.arch == ARM_ARCH_V6M);
 
 	/* Halt target device */
 	if (target->state != TARGET_HALTED) {

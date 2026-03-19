@@ -123,7 +123,7 @@ static int linux_read_memory(struct target *target,
 		target->rtos->rtos_specific_params;
 	uint32_t pa = (address & linux_os->phys_mask) + linux_os->phys_base;
 #endif
-	if (address < 0xc000000) {
+	if (address < 0xc0000000) {
 		LOG_ERROR("linux awareness : address in user space");
 		return ERROR_FAIL;
 	}
@@ -624,7 +624,7 @@ static struct threads *liste_add_task(struct threads *task_list, struct threads 
 {
 	t->next = NULL;
 
-	if (!*last)
+	if (!*last) {
 		if (!task_list) {
 			task_list = t;
 			return task_list;
@@ -637,7 +637,8 @@ static struct threads *liste_add_task(struct threads *task_list, struct threads 
 			temp->next = t;
 			*last = t;
 			return task_list;
-		} else {
+		}
+	} else {
 		(*last)->next = t;
 		*last = t;
 		return task_list;
@@ -1039,6 +1040,10 @@ static int linux_gdb_thread_packet(struct target *target,
 		return ERROR_TARGET_FAILURE;
 
 	char *out_str = calloc(MAX_THREADS * 17 + 10, 1);
+	if (!out_str) {
+		LOG_ERROR("Out of memory");
+		return ERROR_FAIL;
+	}
 	char *tmp_str = out_str;
 	tmp_str += sprintf(tmp_str, "m");
 	struct threads *temp = linux_os->thread_list;
@@ -1115,23 +1120,13 @@ static int linux_thread_extra_info(struct target *target,
 
 	while (temp) {
 		if (temp->threadid == threadid) {
-			char *pid = " PID: ";
-			char *pid_current = "*PID: ";
-			char *name = "Name: ";
-			int str_size = strlen(pid) + strlen(name);
-			char *tmp_str = calloc(1, str_size + 50);
-			char *tmp_str_ptr = tmp_str;
-
-			/*  discriminate current task */
-			if (temp->status == 3)
-				tmp_str_ptr += sprintf(tmp_str_ptr, "%s",
-						pid_current);
-			else
-				tmp_str_ptr += sprintf(tmp_str_ptr, "%s", pid);
-
-			tmp_str_ptr += sprintf(tmp_str_ptr, "%d, ", (int)temp->pid);
-			sprintf(tmp_str_ptr, "%s", name);
-			sprintf(tmp_str_ptr, "%s", temp->name);
+			char *tmp_str = alloc_printf("%cPID: %" PRIu32 ", Name: %s",
+					temp->status == 3 ? '*' : ' ',
+					temp->pid, temp->name);
+			if (!tmp_str) {
+				LOG_ERROR("Out of memory");
+				return ERROR_FAIL;
+			}
 			char *hex_str = calloc(1, strlen(tmp_str) * 2 + 1);
 			size_t pkt_len = hexify(hex_str, (const uint8_t *)tmp_str,
 				strlen(tmp_str), strlen(tmp_str) * 2 + 1);
@@ -1287,86 +1282,77 @@ static int linux_thread_packet(struct connection *connection, char const *packet
 		target->rtos->rtos_specific_params;
 
 	switch (packet[0]) {
-		case 'T':		/* Is thread alive?*/
+	case 'T':		/* Is thread alive?*/
+		linux_gdb_t_packet(connection, target, packet, packet_size);
+		break;
 
-			linux_gdb_t_packet(connection, target, packet, packet_size);
-			break;
-		case 'H':		/* Set current thread */
-			/*  ( 'c' for step and continue, 'g' for all other operations )*/
-			/*LOG_INFO(" H packet received '%s'", packet);*/
-			linux_gdb_h_packet(connection, target, packet, packet_size);
-			break;
-		case 'q':
+	case 'H':		/* Set current thread */
+		/*  ( 'c' for step and continue, 'g' for all other operations )*/
+		/*LOG_INFO(" H packet received '%s'", packet);*/
+		linux_gdb_h_packet(connection, target, packet, packet_size);
+		break;
 
-			if (strncmp(packet, "qSymbol", 7) == 0) {
-				if (rtos_qsymbol(connection, packet, packet_size) == 1) {
-					linux_compute_virt2phys(target,
-							target->rtos->symbols[INIT_TASK].address);
-				}
-
-				break;
-			} else if (strncmp(packet, "qfThreadInfo", 12) == 0) {
-				if (!linux_os->thread_list) {
-					retval = linux_gdb_thread_packet(target,
-							connection,
-							packet,
-							packet_size);
-					break;
-				} else {
-					retval = linux_gdb_thread_update(target,
-							connection,
-							packet,
-							packet_size);
-					break;
-				}
-			} else if (strncmp(packet, "qsThreadInfo", 12) == 0) {
-				gdb_put_packet(connection, "l", 1);
-				break;
-			} else if (strncmp(packet, "qThreadExtraInfo,", 17) == 0) {
-				linux_thread_extra_info(target, connection, packet,
-						packet_size);
-				break;
-			} else {
-				retval = GDB_THREAD_PACKET_NOT_CONSUMED;
-				break;
+	case 'q':
+		if (!strncmp(packet, "qSymbol", 7)) {
+			if (rtos_qsymbol(connection, packet, packet_size) == 1) {
+				linux_compute_virt2phys(target,
+						target->rtos->symbols[INIT_TASK].address);
 			}
-
-		case 'Q':
-			/* previously response was : thread not found
-			 * gdb_put_packet(connection, "E01", 3); */
+		} else if (!strncmp(packet, "qfThreadInfo", 12)) {
+			if (!linux_os->thread_list) {
+				retval = linux_gdb_thread_packet(target,
+						connection,
+						packet,
+						packet_size);
+			} else {
+				retval = linux_gdb_thread_update(target,
+						connection,
+						packet,
+						packet_size);
+			}
+		} else if (!strncmp(packet, "qsThreadInfo", 12)) {
+			gdb_put_packet(connection, "l", 1);
+		} else if (!strncmp(packet, "qThreadExtraInfo,", 17)) {
+			linux_thread_extra_info(target, connection, packet,
+					packet_size);
+		} else {
 			retval = GDB_THREAD_PACKET_NOT_CONSUMED;
-			break;
-		case 'c':
-		case 's': {
-			if (linux_os->threads_lookup == 1) {
+		}
+		break;
+
+	case 'Q':
+		/* previously response was : thread not found
+		 * gdb_put_packet(connection, "E01", 3); */
+		retval = GDB_THREAD_PACKET_NOT_CONSUMED;
+		break;
+
+	case 'c':
+	case 's':
+		if (linux_os->threads_lookup == 1) {
+			ct = linux_os->current_threads;
+
+			while ((ct) && (ct->core_id) != target->coreid)
+				ct = ct->next;
+
+			if ((ct) && (ct->threadid == -1)) {
 				ct = linux_os->current_threads;
 
-				while ((ct) && (ct->core_id) != target->coreid)
+				while ((ct) && (ct->threadid == -1))
 					ct = ct->next;
-
-				if ((ct) && (ct->threadid == -1)) {
-					ct = linux_os->current_threads;
-
-					while ((ct) && (ct->threadid == -1))
-						ct = ct->next;
-				}
-
-				if ((ct) && (ct->threadid !=
-						 target->rtos->current_threadid)
-				&& (target->rtos->current_threadid != -1))
-					LOG_WARNING("WARNING! current GDB thread do not match "
-							"current thread running. "
-							"Switch thread in GDB to threadid %d",
-							(int)ct->threadid);
-
-				LOG_INFO("threads_needs_update = 1");
-				linux_os->threads_needs_update = 1;
 			}
-		}
 
-		/* if a packet handler returned an error, exit input loop */
-		if (retval != ERROR_OK)
-			return retval;
+			if ((ct) && (ct->threadid !=
+					 target->rtos->current_threadid)
+			&& (target->rtos->current_threadid != -1))
+				LOG_WARNING("WARNING! current GDB thread do not match "
+						"current thread running. "
+						"Switch thread in GDB to threadid %d",
+						(int)ct->threadid);
+
+			LOG_INFO("threads_needs_update = 1");
+			linux_os->threads_needs_update = 1;
+		}
+		break;
 	}
 
 	return retval;
@@ -1429,7 +1415,7 @@ static int linux_os_create(struct target *target)
 	/*  initialize a default virt 2 phys translation */
 	os_linux->phys_mask = ~0xc0000000;
 	os_linux->phys_base = 0x0;
-	return JIM_OK;
+	return ERROR_OK;
 }
 
 static char *linux_ps_command(struct target *target)

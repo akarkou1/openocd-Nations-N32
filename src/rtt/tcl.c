@@ -17,10 +17,16 @@
 
 COMMAND_HANDLER(handle_rtt_setup_command)
 {
-struct rtt_source source;
+	struct rtt_source source;
 
-	if (CMD_ARGC != 3)
+	const char *DEFAULT_ID = "SEGGER RTT";
+	const char *selected_id;
+	if (CMD_ARGC < 2 || CMD_ARGC > 3)
 		return ERROR_COMMAND_SYNTAX_ERROR;
+	if (CMD_ARGC == 2)
+		selected_id = DEFAULT_ID;
+	else
+		selected_id = CMD_ARGV[2];
 
 	source.find_cb = &target_rtt_find_control_block;
 	source.read_cb = &target_rtt_read_control_block;
@@ -38,7 +44,7 @@ struct rtt_source source;
 
 	rtt_register_source(source, get_current_target(CMD_CTX));
 
-	if (rtt_setup(address, size, CMD_ARGV[2]) != ERROR_OK)
+	if (rtt_setup(address, size, selected_id) != ERROR_OK)
 		return ERROR_FAIL;
 
 	return ERROR_OK;
@@ -111,7 +117,7 @@ COMMAND_HANDLER(handle_rtt_channels_command)
 
 	ctrl = rtt_get_control();
 
-	command_print(CMD, "Channels: up=%u, down=%u", ctrl->num_up_channels,
+	command_print(CMD, "Channels: up=%" PRIu32 ", down=%" PRIu32, ctrl->num_up_channels,
 		ctrl->num_down_channels);
 
 	command_print(CMD, "Up-channels:");
@@ -128,7 +134,7 @@ COMMAND_HANDLER(handle_rtt_channels_command)
 		if (!info.size)
 			continue;
 
-		command_print(CMD, "%u: %s %u %u", i, info.name, info.size,
+		command_print(CMD, "%u: %s %" PRIu32 " %" PRIu32, i, info.name, info.size,
 			info.flags);
 	}
 
@@ -143,7 +149,7 @@ COMMAND_HANDLER(handle_rtt_channels_command)
 		if (!info.size)
 			continue;
 
-		command_print(CMD, "%u: %s %u %u", i, info.name, info.size,
+		command_print(CMD, "%u: %s %" PRIu32 " %" PRIu32, i, info.name, info.size,
 			info.flags);
 	}
 
@@ -218,7 +224,7 @@ static const struct command_registration rtt_subcommand_handlers[] = {
 		.handler = handle_rtt_setup_command,
 		.mode = COMMAND_ANY,
 		.help = "setup RTT",
-		.usage = "<address> <size> <ID>"
+		.usage = "<address> <size> [ID]"
 	},
 	{
 		.name = "start",

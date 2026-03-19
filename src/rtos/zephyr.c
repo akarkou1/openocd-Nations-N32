@@ -20,7 +20,6 @@
 #include "rtos.h"
 #include "rtos_standard_stackings.h"
 #include "target/target.h"
-#include "target/target_type.h"
 #include "target/armv7m.h"
 #include "target/arc.h"
 
@@ -57,6 +56,7 @@ enum zephyr_offsets {
 	OFFSET_T_ARCH,
 	OFFSET_T_PREEMPT_FLOAT,
 	OFFSET_T_COOP_FLOAT,
+	OFFSET_T_ARM_EXC_RETURN,
 	OFFSET_MAX
 };
 

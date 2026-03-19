@@ -79,7 +79,7 @@ static int arm946e_init_arch_info(struct target *target,
 	return ERROR_OK;
 }
 
-static int arm946e_target_create(struct target *target, Jim_Interp *interp)
+static int arm946e_target_create(struct target *target)
 {
 	struct arm946e_common *arm946e = calloc(1, sizeof(struct arm946e_common));
 
@@ -574,7 +574,7 @@ COMMAND_HANDLER(arm946e_handle_cp15)
 		return retval;
 
 	if (target->state != TARGET_HALTED) {
-		command_print(CMD, "target must be stopped for \"%s\" command", CMD_NAME);
+		command_print(CMD, "Error: target must be stopped for \"%s\" command", CMD_NAME);
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -624,7 +624,7 @@ COMMAND_HANDLER(arm946e_handle_idcache)
 		return retval;
 
 	if (target->state != TARGET_HALTED) {
-		command_print(CMD, "target must be stopped for \"%s\" command", CMD_NAME);
+		command_print(CMD, "Error: target must be stopped for \"%s\" command", CMD_NAME);
 		return ERROR_TARGET_NOT_HALTED;
 	}
 

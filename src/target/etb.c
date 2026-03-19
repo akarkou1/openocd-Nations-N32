@@ -287,7 +287,7 @@ static int etb_write_reg(struct reg *reg, uint32_t value)
 	uint8_t reg_addr = etb_reg->addr & 0x7f;
 	struct scan_field fields[3];
 
-	LOG_DEBUG("%i: 0x%8.8" PRIx32 "", (int)(etb_reg->addr), value);
+	LOG_DEBUG("%i: 0x%8.8" PRIx32, (int)(etb_reg->addr), value);
 
 	etb_scann(etb_reg->etb, 0x0);
 	etb_set_instr(etb_reg->etb, 0xc);
@@ -454,12 +454,12 @@ static int etb_init(struct etm_context *etm_ctx)
 	return ERROR_OK;
 }
 
-static trace_status_t etb_status(struct etm_context *etm_ctx)
+static enum trace_status etb_status(struct etm_context *etm_ctx)
 {
 	struct etb *etb = etm_ctx->capture_driver_priv;
 	struct reg *control = &etb->reg_cache->reg_list[ETB_CTRL];
 	struct reg *status = &etb->reg_cache->reg_list[ETB_STATUS];
-	trace_status_t retval = 0;
+	enum trace_status retval = 0;
 	int etb_timeout = 100;
 
 	etb->etm_ctx = etm_ctx;

@@ -62,8 +62,6 @@
 #define  OFFSET_EFC_FSR   8
 #define  OFFSET_EFC_FRR   12
 
-extern const struct flash_driver at91sam4_flash;
-
 static float _tomhz(uint32_t freq_hz)
 {
 	float f;
@@ -136,15 +134,15 @@ struct sam4_bank_private {
 	struct sam4_chip *chip;
 	/* so we can find the original bank pointer */
 	struct flash_bank *bank;
-	unsigned bank_number;
+	unsigned int bank_number;
 	uint32_t controller_address;
 	uint32_t base_address;
 	uint32_t flash_wait_states;
 	bool present;
-	unsigned size_bytes;
-	unsigned nsectors;
-	unsigned sector_size;
-	unsigned page_size;
+	unsigned int size_bytes;
+	unsigned int nsectors;
+	unsigned int sector_size;
+	unsigned int page_size;
 };
 
 struct sam4_chip_details {
@@ -158,12 +156,12 @@ struct sam4_chip_details {
 	uint32_t chipid_cidr;
 	const char *name;
 
-	unsigned n_gpnvms;
+	unsigned int n_gpnvms;
 #define SAM4_N_NVM_BITS 3
-	unsigned gpnvm[SAM4_N_NVM_BITS];
-	unsigned total_flash_size;
-	unsigned total_sram_size;
-	unsigned n_banks;
+	unsigned int gpnvm[SAM4_N_NVM_BITS];
+	unsigned int total_flash_size;
+	unsigned int total_sram_size;
+	unsigned int n_banks;
 #define SAM4_MAX_FLASH_BANKS 2
 	/* these are "initialized" from the global const data */
 	struct sam4_bank_private bank[SAM4_MAX_FLASH_BANKS];
@@ -1481,7 +1479,7 @@ static int efc_get_result(struct sam4_bank_private *private, uint32_t *v)
 }
 
 static int efc_start_command(struct sam4_bank_private *private,
-	unsigned command, unsigned argument)
+	unsigned int command, unsigned int argument)
 {
 	uint32_t n, v;
 	int r;
@@ -1492,40 +1490,39 @@ do_retry:
 
 	/* Check command & argument */
 	switch (command) {
+	case AT91C_EFC_FCMD_WP:
+	case AT91C_EFC_FCMD_WPL:
+	case AT91C_EFC_FCMD_EWP:
+	case AT91C_EFC_FCMD_EWPL:
+	/* case AT91C_EFC_FCMD_EPL: */
+	case AT91C_EFC_FCMD_EPA:
+	case AT91C_EFC_FCMD_SLB:
+	case AT91C_EFC_FCMD_CLB:
+		n = (private->size_bytes / private->page_size);
+		if (argument >= n)
+			LOG_ERROR("*BUG*: Embedded flash has only %" PRIu32 " pages", n);
+		break;
 
-		case AT91C_EFC_FCMD_WP:
-		case AT91C_EFC_FCMD_WPL:
-		case AT91C_EFC_FCMD_EWP:
-		case AT91C_EFC_FCMD_EWPL:
-		/* case AT91C_EFC_FCMD_EPL: */
-		case AT91C_EFC_FCMD_EPA:
-		case AT91C_EFC_FCMD_SLB:
-		case AT91C_EFC_FCMD_CLB:
-			n = (private->size_bytes / private->page_size);
-			if (argument >= n)
-				LOG_ERROR("*BUG*: Embedded flash has only %u pages", (unsigned)(n));
-			break;
+	case AT91C_EFC_FCMD_SFB:
+	case AT91C_EFC_FCMD_CFB:
+		if (argument >= private->chip->details.n_gpnvms) {
+			LOG_ERROR("*BUG*: Embedded flash has only %d GPNVMs",
+					private->chip->details.n_gpnvms);
+		}
+		break;
 
-		case AT91C_EFC_FCMD_SFB:
-		case AT91C_EFC_FCMD_CFB:
-			if (argument >= private->chip->details.n_gpnvms) {
-				LOG_ERROR("*BUG*: Embedded flash has only %d GPNVMs",
-						private->chip->details.n_gpnvms);
-			}
-			break;
-
-		case AT91C_EFC_FCMD_GETD:
-		case AT91C_EFC_FCMD_EA:
-		case AT91C_EFC_FCMD_GLB:
-		case AT91C_EFC_FCMD_GFB:
-		case AT91C_EFC_FCMD_STUI:
-		case AT91C_EFC_FCMD_SPUI:
-			if (argument != 0)
-				LOG_ERROR("Argument is meaningless for cmd: %d", command);
-			break;
-		default:
-			LOG_ERROR("Unknown command %d", command);
-			break;
+	case AT91C_EFC_FCMD_GETD:
+	case AT91C_EFC_FCMD_EA:
+	case AT91C_EFC_FCMD_GLB:
+	case AT91C_EFC_FCMD_GFB:
+	case AT91C_EFC_FCMD_STUI:
+	case AT91C_EFC_FCMD_SPUI:
+		if (argument != 0)
+			LOG_ERROR("Argument is meaningless for cmd: %d", command);
+		break;
+	default:
+		LOG_ERROR("Unknown command %d", command);
+		break;
 	}
 
 	if (command == AT91C_EFC_FCMD_SPUI) {
@@ -1576,8 +1573,8 @@ do_retry:
  * @param status   - put command status bits here
  */
 static int efc_perform_command(struct sam4_bank_private *private,
-	unsigned command,
-	unsigned argument,
+	unsigned int command,
+	unsigned int argument,
 	uint32_t *status)
 {
 
@@ -1680,21 +1677,21 @@ static int flashd_erase_pages(struct sam4_bank_private *private,
 	LOG_DEBUG("Here");
 	uint8_t erase_pages;
 	switch (num_pages)	{
-		case 4:
-			erase_pages = 0x00;
-			break;
-		case 8:
-			erase_pages = 0x01;
-			break;
-		case 16:
-			erase_pages = 0x02;
-			break;
-		case 32:
-			erase_pages = 0x03;
-			break;
-		default:
-			erase_pages = 0x00;
-			break;
+	case 4:
+		erase_pages = 0x00;
+		break;
+	case 8:
+		erase_pages = 0x01;
+		break;
+	case 16:
+		erase_pages = 0x02;
+		break;
+	case 32:
+		erase_pages = 0x03;
+		break;
+	default:
+		erase_pages = 0x00;
+		break;
 	}
 
 	/* AT91C_EFC_FCMD_EPA
@@ -1718,7 +1715,7 @@ static int flashd_erase_pages(struct sam4_bank_private *private,
  * @param puthere  - result stored here.
  */
 /* ------------------------------------------------------------------------------ */
-static int flashd_get_gpnvm(struct sam4_bank_private *private, unsigned gpnvm, unsigned *puthere)
+static int flashd_get_gpnvm(struct sam4_bank_private *private, unsigned int gpnvm, unsigned int *puthere)
 {
 	uint32_t v;
 	int r;
@@ -1759,10 +1756,10 @@ static int flashd_get_gpnvm(struct sam4_bank_private *private, unsigned gpnvm, u
  * @param gpnvm GPNVM index.
  * @returns 0 if successful; otherwise returns an error code.
  */
-static int flashd_clr_gpnvm(struct sam4_bank_private *private, unsigned gpnvm)
+static int flashd_clr_gpnvm(struct sam4_bank_private *private, unsigned int gpnvm)
 {
 	int r;
-	unsigned v;
+	unsigned int v;
 
 	LOG_DEBUG("Here");
 	if (private->bank_number != 0) {
@@ -1791,10 +1788,10 @@ static int flashd_clr_gpnvm(struct sam4_bank_private *private, unsigned gpnvm)
  * @param private info about the bank
  * @param gpnvm GPNVM index.
  */
-static int flashd_set_gpnvm(struct sam4_bank_private *private, unsigned gpnvm)
+static int flashd_set_gpnvm(struct sam4_bank_private *private, unsigned int gpnvm)
 {
 	int r;
-	unsigned v;
+	unsigned int v;
 
 	if (private->bank_number != 0) {
 		LOG_ERROR("GPNVM only works with Bank0");
@@ -1848,8 +1845,8 @@ static int flashd_get_lock_bits(struct sam4_bank_private *private, uint32_t *v)
  */
 
 static int flashd_unlock(struct sam4_bank_private *private,
-	unsigned start_sector,
-	unsigned end_sector)
+	unsigned int start_sector,
+	unsigned int end_sector)
 {
 	int r;
 	uint32_t status;
@@ -1878,8 +1875,8 @@ static int flashd_unlock(struct sam4_bank_private *private,
  * @param end_sector   - last sector (inclusive) to lock
  */
 static int flashd_lock(struct sam4_bank_private *private,
-	unsigned start_sector,
-	unsigned end_sector)
+	unsigned int start_sector,
+	unsigned int end_sector)
 {
 	uint32_t status;
 	uint32_t pg;
@@ -1907,8 +1904,8 @@ static int flashd_lock(struct sam4_bank_private *private,
 static uint32_t sam4_reg_fieldname(struct sam4_chip *chip,
 	const char *regname,
 	uint32_t value,
-	unsigned shift,
-	unsigned width)
+	unsigned int shift,
+	unsigned int width)
 {
 	uint32_t v;
 	int hwidth, dwidth;
@@ -1993,7 +1990,7 @@ static const char *const sramsize[] = {
 
 };
 
-static const struct archnames { unsigned value; const char *name; } archnames[] = {
+static const struct archnames { unsigned int value; const char *name; } archnames[] = {
 	{ 0x19,  "AT91SAM9xx Series"                                            },
 	{ 0x29,  "AT91SAM9XExx Series"                                          },
 	{ 0x34,  "AT91x34 Series"                                                       },
@@ -2082,18 +2079,18 @@ static void sam4_explain_ckgr_mor(struct sam4_chip *chip)
 	chip->cfg.rc_freq = 0;
 	if (rcen) {
 		switch (v) {
-			default:
-				chip->cfg.rc_freq = 0;
-				break;
-			case 0:
-				chip->cfg.rc_freq = 4 * 1000 * 1000;
-				break;
-			case 1:
-				chip->cfg.rc_freq = 8 * 1000 * 1000;
-				break;
-			case 2:
-				chip->cfg.rc_freq = 12 * 1000 * 1000;
-				break;
+		case 0:
+			chip->cfg.rc_freq = 4 * 1000 * 1000;
+			break;
+		case 1:
+			chip->cfg.rc_freq = 8 * 1000 * 1000;
+			break;
+		case 2:
+			chip->cfg.rc_freq = 12 * 1000 * 1000;
+			break;
+		default:
+			chip->cfg.rc_freq = 0;
+			break;
 		}
 	}
 
@@ -2194,30 +2191,30 @@ static void sam4_explain_mckr(struct sam4_chip *chip)
 
 	css = sam4_reg_fieldname(chip, "CSS", chip->cfg.PMC_MCKR, 0, 2);
 	switch (css & 3) {
-		case 0:
-			fin = chip->cfg.slow_freq;
-			cp = "slowclk";
-			break;
-		case 1:
-			fin = chip->cfg.mainosc_freq;
-			cp  = "mainosc";
-			break;
-		case 2:
-			fin = chip->cfg.plla_freq;
-			cp  = "plla";
-			break;
-		case 3:
-			if (chip->cfg.CKGR_UCKR & (1 << 16)) {
-				fin = 480 * 1000 * 1000;
-				cp = "upll";
-			} else {
-				fin = 0;
-				cp  = "upll (*ERROR* UPLL is disabled)";
-			}
-			break;
-		default:
-			assert(0);
-			break;
+	case 0:
+		fin = chip->cfg.slow_freq;
+		cp = "slowclk";
+		break;
+	case 1:
+		fin = chip->cfg.mainosc_freq;
+		cp  = "mainosc";
+		break;
+	case 2:
+		fin = chip->cfg.plla_freq;
+		cp  = "plla";
+		break;
+	case 3:
+		if (chip->cfg.CKGR_UCKR & (1 << 16)) {
+			fin = 480 * 1000 * 1000;
+			cp = "upll";
+		} else {
+			fin = 0;
+			cp  = "upll (*ERROR* UPLL is disabled)";
+		}
+		break;
+	default:
+		assert(0);
+		break;
 	}
 
 	LOG_USER("%s (%3.03f Mhz)",
@@ -2225,41 +2222,41 @@ static void sam4_explain_mckr(struct sam4_chip *chip)
 		_tomhz(fin));
 	pres = sam4_reg_fieldname(chip, "PRES", chip->cfg.PMC_MCKR, 4, 3);
 	switch (pres & 0x07) {
-		case 0:
-			pdiv = 1;
-			cp = "selected clock";
-			break;
-		case 1:
-			pdiv = 2;
-			cp = "clock/2";
-			break;
-		case 2:
-			pdiv = 4;
-			cp = "clock/4";
-			break;
-		case 3:
-			pdiv = 8;
-			cp = "clock/8";
-			break;
-		case 4:
-			pdiv = 16;
-			cp = "clock/16";
-			break;
-		case 5:
-			pdiv = 32;
-			cp = "clock/32";
-			break;
-		case 6:
-			pdiv = 64;
-			cp = "clock/64";
-			break;
-		case 7:
-			pdiv = 6;
-			cp = "clock/6";
-			break;
-		default:
-			assert(0);
-			break;
+	case 0:
+		pdiv = 1;
+		cp = "selected clock";
+		break;
+	case 1:
+		pdiv = 2;
+		cp = "clock/2";
+		break;
+	case 2:
+		pdiv = 4;
+		cp = "clock/4";
+		break;
+	case 3:
+		pdiv = 8;
+		cp = "clock/8";
+		break;
+	case 4:
+		pdiv = 16;
+		cp = "clock/16";
+		break;
+	case 5:
+		pdiv = 32;
+		cp = "clock/32";
+		break;
+	case 6:
+		pdiv = 64;
+		cp = "clock/64";
+		break;
+	case 7:
+		pdiv = 6;
+		cp = "clock/6";
+		break;
+	default:
+		assert(0);
+		break;
 	}
 	LOG_USER("(%s)", cp);
 	fin = fin / pdiv;
@@ -2376,8 +2373,8 @@ static int sam4_read_this_reg(struct sam4_chip *chip, uint32_t *goes_here)
 
 	r = target_read_u32(chip->target, reg->address, goes_here);
 	if (r != ERROR_OK) {
-		LOG_ERROR("Cannot read SAM4 register: %s @ 0x%08x, Err: %d",
-			reg->name, (unsigned)(reg->address), r);
+		LOG_ERROR("Cannot read SAM4 register: %s @ 0x%08" PRIx32 ", Err: %d",
+			reg->name, reg->address, r);
 	}
 	return r;
 }
@@ -2392,8 +2389,8 @@ static int sam4_read_all_regs(struct sam4_chip *chip)
 		r = sam4_read_this_reg(chip,
 				sam4_get_reg_ptr(&(chip->cfg), reg));
 		if (r != ERROR_OK) {
-			LOG_ERROR("Cannot read SAM4 register: %s @ 0x%08x, Error: %d",
-				reg->name, ((unsigned)(reg->address)), r);
+			LOG_ERROR("Cannot read SAM4 register: %s @ 0x%08" PRIx32 ", Error: %d",
+				reg->name, reg->address, r);
 			return r;
 		}
 		reg++;
@@ -2446,7 +2443,7 @@ static int sam4_protect_check(struct flash_bank *bank)
 {
 	int r;
 	uint32_t v[4] = {0};
-	unsigned x;
+	unsigned int x;
 	struct sam4_bank_private *private;
 
 	LOG_DEBUG("Begin");
@@ -2506,32 +2503,32 @@ FLASH_BANK_COMMAND_HANDLER(sam4_flash_bank_command)
 	}
 
 	switch (bank->base) {
-		default:
-			LOG_ERROR("Address 0x%08x invalid bank address (try 0x%08x"
-				"[at91sam4s series] )",
-				((unsigned int)(bank->base)),
-				((unsigned int)(FLASH_BANK_BASE_S)));
-			return ERROR_FAIL;
+	/* at91sam4s series only has bank 0*/
+	/* at91sam4sd series has the same address for bank 0 (FLASH_BANK0_BASE_SD)*/
+	case FLASH_BANK_BASE_S:
+	case FLASH_BANK_BASE_C:
+		bank->driver_priv = &chip->details.bank[0];
+		bank->bank_number = 0;
+		chip->details.bank[0].chip = chip;
+		chip->details.bank[0].bank = bank;
+		break;
 
-		/* at91sam4s series only has bank 0*/
-		/* at91sam4sd series has the same address for bank 0 (FLASH_BANK0_BASE_SD)*/
-		case FLASH_BANK_BASE_S:
-		case FLASH_BANK_BASE_C:
-			bank->driver_priv = &(chip->details.bank[0]);
-			bank->bank_number = 0;
-			chip->details.bank[0].chip = chip;
-			chip->details.bank[0].bank = bank;
-			break;
+	/* Bank 1 of at91sam4sd/at91sam4c32 series */
+	case FLASH_BANK1_BASE_1024K_SD:
+	case FLASH_BANK1_BASE_2048K_SD:
+	case FLASH_BANK1_BASE_C32:
+		bank->driver_priv = &chip->details.bank[1];
+		bank->bank_number = 1;
+		chip->details.bank[1].chip = chip;
+		chip->details.bank[1].bank = bank;
+		break;
 
-		/* Bank 1 of at91sam4sd/at91sam4c32 series */
-		case FLASH_BANK1_BASE_1024K_SD:
-		case FLASH_BANK1_BASE_2048K_SD:
-		case FLASH_BANK1_BASE_C32:
-			bank->driver_priv = &(chip->details.bank[1]);
-			bank->bank_number = 1;
-			chip->details.bank[1].chip = chip;
-			chip->details.bank[1].bank = bank;
-			break;
+	default:
+		LOG_ERROR("Address " TARGET_ADDR_FMT " invalid bank address (try 0x%08x"
+			"[at91sam4s series] )",
+			bank->base,
+			FLASH_BANK_BASE_S);
+		return ERROR_FAIL;
 	}
 
 	/* we initialize after probing. */
@@ -2559,7 +2556,7 @@ static int sam4_get_details(struct sam4_bank_private *private)
 	const struct sam4_chip_details *details;
 	struct sam4_chip *chip;
 	struct flash_bank *saved_banks[SAM4_MAX_FLASH_BANKS];
-	unsigned x;
+	unsigned int x;
 
 	LOG_DEBUG("Begin");
 	details = all_sam4_details;
@@ -2798,7 +2795,7 @@ static int sam4_protect(struct flash_bank *bank, int set, unsigned int first,
 
 }
 
-static int sam4_page_read(struct sam4_bank_private *private, unsigned pagenum, uint8_t *buf)
+static int sam4_page_read(struct sam4_bank_private *private, unsigned int pagenum, uint8_t *buf)
 {
 	uint32_t adr;
 	int r;
@@ -2843,7 +2840,7 @@ static int sam4_set_wait(struct sam4_bank_private *private)
 	return r;
 }
 
-static int sam4_page_write(struct sam4_bank_private *private, unsigned pagenum, const uint8_t *buf)
+static int sam4_page_write(struct sam4_bank_private *private, unsigned int pagenum, const uint8_t *buf)
 {
 	uint32_t adr;
 	uint32_t status;
@@ -2893,10 +2890,10 @@ static int sam4_write(struct flash_bank *bank,
 	uint32_t count)
 {
 	int n;
-	unsigned page_cur;
-	unsigned page_end;
+	unsigned int page_cur;
+	unsigned int page_end;
 	int r;
-	unsigned page_offset;
+	unsigned int page_offset;
 	struct sam4_bank_private *private;
 	uint8_t *pagebuffer;
 
@@ -3047,7 +3044,7 @@ COMMAND_HANDLER(sam4_handle_info_command)
 	if (!chip)
 		return ERROR_OK;
 
-	unsigned x;
+	unsigned int x;
 	int r;
 
 	/* bank0 must exist before we can do anything */
@@ -3099,7 +3096,7 @@ need_define:
 
 COMMAND_HANDLER(sam4_handle_gpnvm_command)
 {
-	unsigned x, v;
+	unsigned int x, v;
 	int r, who;
 	struct sam4_chip *chip;
 
@@ -3124,22 +3121,22 @@ COMMAND_HANDLER(sam4_handle_gpnvm_command)
 	}
 
 	switch (CMD_ARGC) {
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
-		case 0:
-			goto showall;
-		case 1:
+	case 0:
+		goto showall;
+	case 1:
+		who = -1;
+		break;
+	case 2:
+		if ((strcmp(CMD_ARGV[0], "show") == 0) && (strcmp(CMD_ARGV[1], "all") == 0)) {
 			who = -1;
-			break;
-		case 2:
-			if ((strcmp(CMD_ARGV[0], "show") == 0) && (strcmp(CMD_ARGV[1], "all") == 0))
-				who = -1;
-			else {
-				uint32_t v32;
-				COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], v32);
-				who = v32;
-			}
-			break;
+		} else {
+			uint32_t v32;
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], v32);
+			who = v32;
+		}
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	if (strcmp("show", CMD_ARGV[0]) == 0) {
@@ -3191,26 +3188,26 @@ COMMAND_HANDLER(sam4_handle_slowclk_command)
 		return ERROR_OK;
 
 	switch (CMD_ARGC) {
-		case 0:
-			/* show */
-			break;
-		case 1:
-		{
-			/* set */
-			uint32_t v;
-			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], v);
-			if (v > 200000) {
-				/* absurd slow clock of 200Khz? */
-				command_print(CMD, "Absurd/illegal slow clock freq: %d\n", (int)(v));
-				return ERROR_COMMAND_SYNTAX_ERROR;
-			}
-			chip->cfg.slow_freq = v;
-			break;
-		}
-		default:
-			/* error */
-			command_print(CMD, "Too many parameters");
+	case 0:
+		/* show */
+		break;
+	case 1:
+	{
+		/* set */
+		uint32_t v;
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[0], v);
+		if (v > 200000) {
+			/* absurd slow clock of 200Khz? */
+			command_print(CMD, "Absurd/illegal slow clock freq: %d\n", (int)(v));
 			return ERROR_COMMAND_SYNTAX_ERROR;
+		}
+		chip->cfg.slow_freq = v;
+		break;
+	}
+	default:
+		/* error */
+		command_print(CMD, "Too many parameters");
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 	command_print(CMD, "Slowclk freq: %d.%03dkhz",
 		(int)(chip->cfg.slow_freq / 1000),

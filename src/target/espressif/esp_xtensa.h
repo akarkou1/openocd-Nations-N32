@@ -10,12 +10,15 @@
 
 #include <target/target.h>
 #include <target/xtensa/xtensa.h>
-#include "esp_xtensa.h"
 #include "esp_semihosting.h"
+#include "esp.h"
+#include "esp_xtensa_apptrace.h"
 
 struct esp_xtensa_common {
 	struct xtensa xtensa;	/* must be the first element */
+	struct esp_common esp;
 	struct esp_semihost_data semihost;
+	struct esp_xtensa_apptrace_info apptrace;
 };
 
 static inline struct esp_xtensa_common *target_to_esp_xtensa(struct target *target)
@@ -34,5 +37,9 @@ void esp_xtensa_queue_tdi_idle(struct target *target);
 int esp_xtensa_breakpoint_add(struct target *target, struct breakpoint *breakpoint);
 int esp_xtensa_breakpoint_remove(struct target *target, struct breakpoint *breakpoint);
 int esp_xtensa_poll(struct target *target);
+int esp_xtensa_profiling(struct target *target, uint32_t *samples,
+	uint32_t max_num_samples, uint32_t *num_samples, uint32_t seconds);
+
+int esp_xtensa_on_halt(struct target *target);
 
 #endif	/* OPENOCD_TARGET_ESP_XTENSA_H */

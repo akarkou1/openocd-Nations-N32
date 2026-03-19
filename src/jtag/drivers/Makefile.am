@@ -123,6 +123,15 @@ ulinkdir = $(pkgdatadir)/OpenULINK
 dist_ulink_DATA = $(ULINK_FIRMWARE)/ulink_firmware.hex
 %C%_libocdjtagdrivers_la_LIBADD += -lm
 endif
+
+if ANGIE
+  angiedir = $(pkgdatadir)/angie
+  DRIVERFILES     += %D%/angie.c
+  dist_angie_DATA  = %D%/angie/angie_firmware.bin
+  dist_angie_DATA += %D%/angie/angie_bitstream.bit
+  %C%_libocdjtagdrivers_la_LIBADD += -lm
+endif
+
 if VSLLINK
 DRIVERFILES += %D%/versaloon/usbtoxxx/usbtogpio.c
 DRIVERFILES += %D%/versaloon/usbtoxxx/usbtojtagraw.c
@@ -135,7 +144,7 @@ endif
 if ARMJTAGEW
 DRIVERFILES += %D%/arm-jtag-ew.c
 endif
-if BUSPIRATE
+if BUS_PIRATE
 DRIVERFILES += %D%/buspirate.c
 endif
 if REMOTE_BITBANG
@@ -153,6 +162,9 @@ endif
 if RSHIM
 DRIVERFILES += %D%/rshim.c
 endif
+if DMEM
+DRIVERFILES += %D%/dmem.c
+endif
 if OSBDM
 DRIVERFILES += %D%/osbdm.c
 endif
@@ -162,8 +174,11 @@ endif
 if SYSFSGPIO
 DRIVERFILES += %D%/sysfsgpio.c
 endif
-if XLNX_PCIE_XVC
-DRIVERFILES += %D%/xlnx-pcie-xvc.c
+if LINUXSPIDEV
+DRIVERFILES += %D%/linuxspidev.c
+endif
+if XLNX_XVC
+DRIVERFILES += %D%/xlnx-xvc.c
 endif
 if BCM2835GPIO
 DRIVERFILES += %D%/bcm2835gpio.c
@@ -171,15 +186,17 @@ endif
 if OPENJTAG
 DRIVERFILES += %D%/openjtag.c
 endif
+if CMSIS_DAP_CORE
+DRIVERFILES += %D%/cmsis_dap.c
+endif
 if CMSIS_DAP_HID
 DRIVERFILES += %D%/cmsis_dap_usb_hid.c
-DRIVERFILES += %D%/cmsis_dap.c
 endif
 if CMSIS_DAP_USB
 DRIVERFILES += %D%/cmsis_dap_usb_bulk.c
-if !CMSIS_DAP_HID
-DRIVERFILES += %D%/cmsis_dap.c
 endif
+if CMSIS_DAP_TCP
+DRIVERFILES += %D%/cmsis_dap_tcp.c
 endif
 if IMX_GPIO
 DRIVERFILES += %D%/imx_gpio.c
@@ -192,6 +209,9 @@ DRIVERFILES += %D%/xds110.c
 endif
 if AM335XGPIO
 DRIVERFILES += %D%/am335xgpio.c
+endif
+if CH347
+DRIVERFILES += %D%/ch347.c
 endif
 
 DRIVERHEADERS = \

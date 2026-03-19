@@ -178,7 +178,7 @@ static const char *psoc4_decode_chip_protection(uint8_t protection)
 	case PSOC4_CHIP_PROT_KILL:
 		return "protection KILL";
 	default:
-		LOG_WARNING("Unknown protection state 0x%02" PRIx8 "", protection);
+		LOG_WARNING("Unknown protection state 0x%02" PRIx8, protection);
 		return "";
 	}
 }
@@ -384,15 +384,15 @@ static int psoc4_get_silicon_id(struct flash_bank *bank, uint32_t *silicon_id, u
 	 * bit 7..0   family ID (lowest 8 bits)
 	 */
 	if (silicon_id)
-			*silicon_id = ((part0 & 0x0000ffff) << 16)
-				    | ((part0 & 0x00ff0000) >> 8)
-				    | (part1 & 0x000000ff);
+		*silicon_id = ((part0 & 0x0000ffff) << 16)
+					  | ((part0 & 0x00ff0000) >> 8)
+					  | (part1 & 0x000000ff);
 
 	if (family_id)
-			*family_id = part1 & 0x0fff;
+		*family_id = part1 & 0x0fff;
 
 	if (protection)
-			*protection = (part1 >> 12) & 0x0f;
+		*protection = (part1 >> 12) & 0x0f;
 
 	return ERROR_OK;
 }
@@ -658,7 +658,7 @@ static int psoc4_write(struct flash_bank *bank, const uint8_t *buffer,
 			memset(row_buffer + chunk_size, bank->default_padded_value, psoc4_info->row_size - chunk_size);
 		}
 		memcpy(row_buffer + row_offset, buffer, chunk_size);
-		LOG_DEBUG("offset / row: 0x%08" PRIx32 " / %" PRIu32 ", size %" PRIu32 "",
+		LOG_DEBUG("offset / row: 0x%08" PRIx32 " / %" PRIu32 ", size %" PRIu32,
 				offset, row_offset, chunk_size);
 
 		uint32_t macro_idx = row_num / PSOC4_ROWS_PER_MACRO;
@@ -779,7 +779,7 @@ static int psoc4_probe(struct flash_bank *bank)
 		flash_size_in_kb = psoc4_info->user_bank_size / 1024;
 	}
 
-	char macros_txt[20] = "";
+	char macros_txt[22] = "";
 	if (num_macros > 1)
 		snprintf(macros_txt, sizeof(macros_txt), " in %" PRIu32 " macros", num_macros);
 
@@ -858,7 +858,7 @@ static int get_psoc4_info(struct flash_bank *bank, struct command_invocation *cm
 			"/0x%02" PRIx16 ", silicon id 0x%08" PRIx32,
 			psoc4_info->family_id, family_id, silicon_id);
 	else {
-		command_print_sameline(cmd, "%s silicon id 0x%08" PRIx32 "",
+		command_print_sameline(cmd, "%s silicon id 0x%08" PRIx32,
 			family->name, silicon_id);
 	}
 

@@ -52,7 +52,9 @@
 #include "transport/transport.h"
 #include "smp.h"
 #include <helper/bits.h>
+#include <helper/nvp.h>
 #include <helper/time_support.h>
+#include <helper/align.h>
 
 static int cortex_a_poll(struct target *target);
 static int cortex_a_debug_entry(struct target *target);
@@ -67,8 +69,8 @@ static int cortex_a_unset_breakpoint(struct target *target,
 	struct breakpoint *breakpoint);
 static int cortex_a_wait_dscr_bits(struct target *target, uint32_t mask,
 	uint32_t value, uint32_t *dscr);
-static int cortex_a_mmu(struct target *target, int *enabled);
-static int cortex_a_mmu_modify(struct target *target, int enable);
+static int cortex_a_mmu(struct target *target, bool *enabled);
+static int cortex_a_mmu_modify(struct target *target, bool enable);
 static int cortex_a_virt2phys(struct target *target,
 	target_addr_t virt, target_addr_t *phys);
 static int cortex_a_read_cpu_memory(struct target *target,
@@ -108,17 +110,17 @@ static int cortex_a_restore_cp15_control_reg(struct target *target)
  * If !phys_access, switch to SVC mode and make sure MMU is on
  * If phys_access, switch off mmu
  */
-static int cortex_a_prep_memaccess(struct target *target, int phys_access)
+static int cortex_a_prep_memaccess(struct target *target, bool phys_access)
 {
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
-	int mmu_enabled = 0;
+	bool mmu_enabled = false;
 
-	if (phys_access == 0) {
+	if (!phys_access) {
 		arm_dpm_modeswitch(&armv7a->dpm, ARM_MODE_SVC);
 		cortex_a_mmu(target, &mmu_enabled);
 		if (mmu_enabled)
-			cortex_a_mmu_modify(target, 1);
+			cortex_a_mmu_modify(target, true);
 		if (cortex_a->dacrfixup_mode == CORTEX_A_DACRFIXUP_ON) {
 			/* overwrite DACR to all-manager */
 			armv7a->arm.mcr(target, 15,
@@ -128,7 +130,7 @@ static int cortex_a_prep_memaccess(struct target *target, int phys_access)
 	} else {
 		cortex_a_mmu(target, &mmu_enabled);
 		if (mmu_enabled)
-			cortex_a_mmu_modify(target, 0);
+			cortex_a_mmu_modify(target, false);
 	}
 	return ERROR_OK;
 }
@@ -138,12 +140,12 @@ static int cortex_a_prep_memaccess(struct target *target, int phys_access)
  * If !phys_access, switch to previous mode
  * If phys_access, restore MMU setting
  */
-static int cortex_a_post_memaccess(struct target *target, int phys_access)
+static int cortex_a_post_memaccess(struct target *target, bool phys_access)
 {
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 
-	if (phys_access == 0) {
+	if (!phys_access) {
 		if (cortex_a->dacrfixup_mode == CORTEX_A_DACRFIXUP_ON) {
 			/* restore */
 			armv7a->arm.mcr(target, 15,
@@ -152,10 +154,10 @@ static int cortex_a_post_memaccess(struct target *target, int phys_access)
 		}
 		arm_dpm_modeswitch(&armv7a->dpm, ARM_MODE_ANY);
 	} else {
-		int mmu_enabled = 0;
+		bool mmu_enabled = false;
 		cortex_a_mmu(target, &mmu_enabled);
 		if (mmu_enabled)
-			cortex_a_mmu_modify(target, 1);
+			cortex_a_mmu_modify(target, true);
 	}
 	return ERROR_OK;
 }
@@ -164,12 +166,12 @@ static int cortex_a_post_memaccess(struct target *target, int phys_access)
 /*  modify cp15_control_reg in order to enable or disable mmu for :
  *  - virt2phys address conversion
  *  - read or write memory in phys or virt address */
-static int cortex_a_mmu_modify(struct target *target, int enable)
+static int cortex_a_mmu_modify(struct target *target, bool enable)
 {
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 	int retval = ERROR_OK;
-	int need_write = 0;
+	bool need_write = false;
 
 	if (enable) {
 		/*  if mmu enabled at target stop and mmu not enable */
@@ -179,12 +181,12 @@ static int cortex_a_mmu_modify(struct target *target, int enable)
 		}
 		if ((cortex_a->cp15_control_reg_curr & 0x1U) == 0) {
 			cortex_a->cp15_control_reg_curr |= 0x1U;
-			need_write = 1;
+			need_write = true;
 		}
 	} else {
 		if ((cortex_a->cp15_control_reg_curr & 0x1U) == 0x1U) {
 			cortex_a->cp15_control_reg_curr &= ~0x1U;
-			need_write = 1;
+			need_write = true;
 		}
 	}
 
@@ -309,19 +311,6 @@ static int cortex_a_exec_opcode(struct target *target,
 
 	if (dscr_p)
 		*dscr_p = dscr;
-
-	return retval;
-}
-
-/* Write to memory mapped registers directly with no cache or mmu handling */
-static int cortex_a_dap_write_memap_register_u32(struct target *target,
-	uint32_t address,
-	uint32_t value)
-{
-	int retval;
-	struct armv7a_common *armv7a = target_to_armv7a(target);
-
-	retval = mem_ap_write_atomic_u32(armv7a->debug_ap, address, value);
 
 	return retval;
 }
@@ -470,6 +459,28 @@ static int cortex_a_instr_write_data_r0(struct arm_dpm *dpm,
 	return retval;
 }
 
+static int cortex_a_instr_write_data_r0_r1(struct arm_dpm *dpm,
+	uint32_t opcode, uint64_t data)
+{
+	struct cortex_a_common *a = dpm_to_a(dpm);
+	uint32_t dscr = DSCR_INSTR_COMP;
+	int retval;
+
+	retval = cortex_a_instr_write_data_rt_dcc(dpm, 0, data & 0xffffffffULL);
+	if (retval != ERROR_OK)
+		return retval;
+
+	retval = cortex_a_instr_write_data_rt_dcc(dpm, 1, data >> 32);
+	if (retval != ERROR_OK)
+		return retval;
+
+	/* then the opcode, taking data from R0, R1 */
+	retval = cortex_a_exec_opcode(a->armv7a_common.arm.target,
+			opcode,
+			&dscr);
+	return retval;
+}
+
 static int cortex_a_instr_cpsr_sync(struct arm_dpm *dpm)
 {
 	struct target *target = dpm->arm->target;
@@ -538,7 +549,30 @@ static int cortex_a_instr_read_data_r0(struct arm_dpm *dpm,
 	return cortex_a_instr_read_data_rt_dcc(dpm, 0, data);
 }
 
-static int cortex_a_bpwp_enable(struct arm_dpm *dpm, unsigned index_t,
+static int cortex_a_instr_read_data_r0_r1(struct arm_dpm *dpm,
+	uint32_t opcode, uint64_t *data)
+{
+	uint32_t lo, hi;
+	int retval;
+
+	/* the opcode, writing data to RO, R1 */
+	retval = cortex_a_instr_read_data_r0(dpm, opcode, &lo);
+	if (retval != ERROR_OK)
+		return retval;
+
+	*data = lo;
+
+	/* write R1 to DCC */
+	retval = cortex_a_instr_read_data_rt_dcc(dpm, 1, &hi);
+	if (retval != ERROR_OK)
+		return retval;
+
+	*data |= (uint64_t)hi << 32;
+
+	return retval;
+}
+
+static int cortex_a_bpwp_enable(struct arm_dpm *dpm, unsigned int index_t,
 	uint32_t addr, uint32_t control)
 {
 	struct cortex_a_common *a = dpm_to_a(dpm);
@@ -547,55 +581,54 @@ static int cortex_a_bpwp_enable(struct arm_dpm *dpm, unsigned index_t,
 	int retval;
 
 	switch (index_t) {
-		case 0 ... 15:	/* breakpoints */
-			vr += CPUDBG_BVR_BASE;
-			cr += CPUDBG_BCR_BASE;
-			break;
-		case 16 ... 31:	/* watchpoints */
-			vr += CPUDBG_WVR_BASE;
-			cr += CPUDBG_WCR_BASE;
-			index_t -= 16;
-			break;
-		default:
-			return ERROR_FAIL;
+	case 0 ... 15:	/* breakpoints */
+		vr += CPUDBG_BVR_BASE;
+		cr += CPUDBG_BCR_BASE;
+		break;
+	case 16 ... 31:	/* watchpoints */
+		vr += CPUDBG_WVR_BASE;
+		cr += CPUDBG_WCR_BASE;
+		index_t -= 16;
+		break;
+	default:
+		return ERROR_FAIL;
 	}
 	vr += 4 * index_t;
 	cr += 4 * index_t;
 
-	LOG_DEBUG("A: bpwp enable, vr %08x cr %08x",
-		(unsigned) vr, (unsigned) cr);
+	LOG_DEBUG("A: bpwp enable, vr %08" PRIx32 " cr %08" PRIx32, vr, cr);
 
-	retval = cortex_a_dap_write_memap_register_u32(dpm->arm->target,
+	retval = mem_ap_write_atomic_u32(a->armv7a_common.debug_ap,
 			vr, addr);
 	if (retval != ERROR_OK)
 		return retval;
-	retval = cortex_a_dap_write_memap_register_u32(dpm->arm->target,
+	retval = mem_ap_write_atomic_u32(a->armv7a_common.debug_ap,
 			cr, control);
 	return retval;
 }
 
-static int cortex_a_bpwp_disable(struct arm_dpm *dpm, unsigned index_t)
+static int cortex_a_bpwp_disable(struct arm_dpm *dpm, unsigned int index_t)
 {
 	struct cortex_a_common *a = dpm_to_a(dpm);
 	uint32_t cr;
 
 	switch (index_t) {
-		case 0 ... 15:
-			cr = a->armv7a_common.debug_base + CPUDBG_BCR_BASE;
-			break;
-		case 16 ... 31:
-			cr = a->armv7a_common.debug_base + CPUDBG_WCR_BASE;
-			index_t -= 16;
-			break;
-		default:
-			return ERROR_FAIL;
+	case 0 ... 15:
+		cr = a->armv7a_common.debug_base + CPUDBG_BCR_BASE;
+		break;
+	case 16 ... 31:
+		cr = a->armv7a_common.debug_base + CPUDBG_WCR_BASE;
+		index_t -= 16;
+		break;
+	default:
+		return ERROR_FAIL;
 	}
 	cr += 4 * index_t;
 
-	LOG_DEBUG("A: bpwp disable, cr %08x", (unsigned) cr);
+	LOG_DEBUG("A: bpwp disable, cr %08" PRIx32, cr);
 
 	/* clear control register */
-	return cortex_a_dap_write_memap_register_u32(dpm->arm->target, cr, 0);
+	return mem_ap_write_atomic_u32(a->armv7a_common.debug_ap, cr, 0);
 }
 
 static int cortex_a_dpm_setup(struct cortex_a_common *a, uint32_t didr)
@@ -611,10 +644,12 @@ static int cortex_a_dpm_setup(struct cortex_a_common *a, uint32_t didr)
 
 	dpm->instr_write_data_dcc = cortex_a_instr_write_data_dcc;
 	dpm->instr_write_data_r0 = cortex_a_instr_write_data_r0;
+	dpm->instr_write_data_r0_r1 = cortex_a_instr_write_data_r0_r1;
 	dpm->instr_cpsr_sync = cortex_a_instr_cpsr_sync;
 
 	dpm->instr_read_data_dcc = cortex_a_instr_read_data_dcc;
 	dpm->instr_read_data_r0 = cortex_a_instr_read_data_r0;
+	dpm->instr_read_data_r0_r1 = cortex_a_instr_read_data_r0_r1;
 
 	dpm->bpwp_enable = cortex_a_bpwp_enable;
 	dpm->bpwp_disable = cortex_a_bpwp_disable;
@@ -726,7 +761,7 @@ static int cortex_a_poll(struct target *target)
 	if (DSCR_RUN_MODE(dscr) == (DSCR_CORE_HALTED | DSCR_CORE_RESTARTED)) {
 		if (prev_target_state != TARGET_HALTED) {
 			/* We have a halting debug event */
-			LOG_DEBUG("Target halted");
+			LOG_TARGET_DEBUG(target, "Target halted");
 			target->state = TARGET_HALTED;
 
 			retval = cortex_a_debug_entry(target);
@@ -774,7 +809,7 @@ static int cortex_a_halt(struct target *target)
 	retval = cortex_a_wait_dscr_bits(target, DSCR_CORE_HALTED,
 			DSCR_CORE_HALTED, &dscr);
 	if (retval != ERROR_OK) {
-		LOG_ERROR("Error waiting for halt");
+		LOG_TARGET_ERROR(target, "Error waiting for halt");
 		return retval;
 	}
 
@@ -783,8 +818,8 @@ static int cortex_a_halt(struct target *target)
 	return ERROR_OK;
 }
 
-static int cortex_a_internal_restore(struct target *target, int current,
-	target_addr_t *address, int handle_breakpoints, int debug_execution)
+static int cortex_a_internal_restore(struct target *target, bool current,
+	target_addr_t *address, bool handle_breakpoints, bool debug_execution)
 {
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 	struct arm *arm = &armv7a->arm;
@@ -815,7 +850,7 @@ static int cortex_a_internal_restore(struct target *target, int current,
 	}
 #endif
 
-	/* current = 1: continue on current pc, otherwise continue at <address> */
+	/* current = true: continue on current pc, otherwise continue at <address> */
 	resume_pc = buf_get_u32(arm->pc->value, 0, 32);
 	if (!current)
 		resume_pc = *address;
@@ -826,24 +861,24 @@ static int cortex_a_internal_restore(struct target *target, int current,
 	 * kill the return address
 	 */
 	switch (arm->core_state) {
-		case ARM_STATE_ARM:
-			resume_pc &= 0xFFFFFFFC;
-			break;
-		case ARM_STATE_THUMB:
-		case ARM_STATE_THUMB_EE:
-			/* When the return address is loaded into PC
-			 * bit 0 must be 1 to stay in Thumb state
-			 */
-			resume_pc |= 0x1;
-			break;
-		case ARM_STATE_JAZELLE:
-			LOG_ERROR("How do I resume into Jazelle state??");
-			return ERROR_FAIL;
-		case ARM_STATE_AARCH64:
-			LOG_ERROR("Shouldn't be in AARCH64 state");
-			return ERROR_FAIL;
+	case ARM_STATE_ARM:
+		resume_pc &= 0xFFFFFFFC;
+		break;
+	case ARM_STATE_THUMB:
+	case ARM_STATE_THUMB_EE:
+		/* When the return address is loaded into PC
+		 * bit 0 must be 1 to stay in Thumb state
+		 */
+		resume_pc |= 0x1;
+		break;
+	case ARM_STATE_JAZELLE:
+		LOG_TARGET_ERROR(target, "How do I resume into Jazelle state??");
+		return ERROR_FAIL;
+	case ARM_STATE_AARCH64:
+		LOG_TARGET_ERROR(target, "Shouldn't be in AARCH64 state");
+		return ERROR_FAIL;
 	}
-	LOG_DEBUG("resume pc = 0x%08" PRIx32, resume_pc);
+	LOG_TARGET_DEBUG(target, "resume pc = 0x%08" PRIx32, resume_pc);
 	buf_set_u32(arm->pc->value, 0, 32, resume_pc);
 	arm->pc->dirty = true;
 	arm->pc->valid = true;
@@ -901,7 +936,7 @@ static int cortex_a_internal_restart(struct target *target)
 		return retval;
 
 	if ((dscr & DSCR_INSTR_COMP) == 0)
-		LOG_ERROR("DSCR InstrCompl must be set before leaving debug!");
+		LOG_TARGET_ERROR(target, "DSCR InstrCompl must be set before leaving debug!");
 
 	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
 			armv7a->debug_base + CPUDBG_DSCR, dscr & ~DSCR_ITR_EN);
@@ -918,7 +953,7 @@ static int cortex_a_internal_restart(struct target *target)
 	retval = cortex_a_wait_dscr_bits(target, DSCR_CORE_RESTARTED,
 			DSCR_CORE_RESTARTED, &dscr);
 	if (retval != ERROR_OK) {
-		LOG_ERROR("Error waiting for resume");
+		LOG_TARGET_ERROR(target, "Error waiting for resume");
 		return retval;
 	}
 
@@ -931,9 +966,9 @@ static int cortex_a_internal_restart(struct target *target)
 	return ERROR_OK;
 }
 
-static int cortex_a_restore_smp(struct target *target, int handle_breakpoints)
+static int cortex_a_restore_smp(struct target *target, bool handle_breakpoints)
 {
-	int retval = 0;
+	int retval = ERROR_OK;
 	struct target_list *head;
 	target_addr_t address;
 
@@ -942,16 +977,24 @@ static int cortex_a_restore_smp(struct target *target, int handle_breakpoints)
 		if ((curr != target) && (curr->state != TARGET_RUNNING)
 			&& target_was_examined(curr)) {
 			/*  resume current address , not in step mode */
-			retval += cortex_a_internal_restore(curr, 1, &address,
-					handle_breakpoints, 0);
-			retval += cortex_a_internal_restart(curr);
+			int retval2 = cortex_a_internal_restore(curr, true, &address,
+					handle_breakpoints, false);
+
+			if (retval2 == ERROR_OK)
+				retval2 = cortex_a_internal_restart(curr);
+
+			if (retval2 == ERROR_OK)
+				target_call_event_callbacks(curr, TARGET_EVENT_RESUMED);
+
+			if (retval == ERROR_OK)
+				retval = retval2;	// save the first error
 		}
 	}
 	return retval;
 }
 
-static int cortex_a_resume(struct target *target, int current,
-	target_addr_t address, int handle_breakpoints, int debug_execution)
+static int cortex_a_resume(struct target *target, bool current,
+	target_addr_t address, bool handle_breakpoints, bool debug_execution)
 {
 	int retval = 0;
 	/* dummy resume for smp toggle in order to reduce gdb impact  */
@@ -963,7 +1006,8 @@ static int cortex_a_resume(struct target *target, int current,
 		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
 		return 0;
 	}
-	cortex_a_internal_restore(target, current, &address, handle_breakpoints, debug_execution);
+	cortex_a_internal_restore(target, current, &address, handle_breakpoints,
+		debug_execution);
 	if (target->smp) {
 		target->gdb_service->core[0] = -1;
 		retval = cortex_a_restore_smp(target, handle_breakpoints);
@@ -975,11 +1019,11 @@ static int cortex_a_resume(struct target *target, int current,
 	if (!debug_execution) {
 		target->state = TARGET_RUNNING;
 		target_call_event_callbacks(target, TARGET_EVENT_RESUMED);
-		LOG_DEBUG("target resumed at " TARGET_ADDR_FMT, address);
+		LOG_TARGET_DEBUG(target, "target resumed at " TARGET_ADDR_FMT, address);
 	} else {
 		target->state = TARGET_DEBUG_RUNNING;
 		target_call_event_callbacks(target, TARGET_EVENT_DEBUG_RESUMED);
-		LOG_DEBUG("target debug resumed at " TARGET_ADDR_FMT, address);
+		LOG_TARGET_DEBUG(target, "target debug resumed at " TARGET_ADDR_FMT, address);
 	}
 
 	return ERROR_OK;
@@ -993,7 +1037,7 @@ static int cortex_a_debug_entry(struct target *target)
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 	struct arm *arm = &armv7a->arm;
 
-	LOG_DEBUG("dscr = 0x%08" PRIx32, cortex_a->cpudbg_dscr);
+	LOG_TARGET_DEBUG(target, "dscr = 0x%08" PRIx32, cortex_a->cpudbg_dscr);
 
 	/* REVISIT surely we should not re-read DSCR !! */
 	retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
@@ -1077,25 +1121,25 @@ static int cortex_a_post_debug_entry(struct target *target)
 			&cortex_a->cp15_control_reg);
 	if (retval != ERROR_OK)
 		return retval;
-	LOG_DEBUG("cp15_control_reg: %8.8" PRIx32, cortex_a->cp15_control_reg);
+	LOG_TARGET_DEBUG(target, "cp15_control_reg: %8.8" PRIx32,
+					 cortex_a->cp15_control_reg);
 	cortex_a->cp15_control_reg_curr = cortex_a->cp15_control_reg;
 
 	if (!armv7a->is_armv7r)
 		armv7a_read_ttbcr(target);
 
-	if (armv7a->armv7a_mmu.armv7a_cache.info == -1)
+	if (!armv7a->armv7a_mmu.armv7a_cache.info_valid)
 		armv7a_identify_cache(target);
 
 	if (armv7a->is_armv7r) {
-		armv7a->armv7a_mmu.mmu_enabled = 0;
+		armv7a->armv7a_mmu.mmu_enabled = false;
 	} else {
-		armv7a->armv7a_mmu.mmu_enabled =
-			(cortex_a->cp15_control_reg & 0x1U) ? 1 : 0;
+		armv7a->armv7a_mmu.mmu_enabled = cortex_a->cp15_control_reg & 0x1U;
 	}
 	armv7a->armv7a_mmu.armv7a_cache.d_u_cache_enabled =
-		(cortex_a->cp15_control_reg & 0x4U) ? 1 : 0;
+		cortex_a->cp15_control_reg & 0x4U;
 	armv7a->armv7a_mmu.armv7a_cache.i_cache_enabled =
-		(cortex_a->cp15_control_reg & 0x1000U) ? 1 : 0;
+		cortex_a->cp15_control_reg & 0x1000U;
 	cortex_a->curr_mode = armv7a->arm.core_mode;
 
 	/* switch to SVC mode to read DACR */
@@ -1134,8 +1178,31 @@ static int cortex_a_set_dscr_bits(struct target *target,
 	return retval;
 }
 
-static int cortex_a_step(struct target *target, int current, target_addr_t address,
-	int handle_breakpoints)
+/*
+ * Single-step on ARMv7a/r is implemented through a HW breakpoint that hits
+ * every instruction at any address except the address of the current
+ * instruction.
+ * Such HW breakpoint is never hit in case of a single instruction that jumps
+ * on itself (infinite loop), or a WFI or a WFE. In this case, halt the CPU
+ * after a timeout.
+ * The jump on itself would be executed several times before the timeout forces
+ * the halt, but this is not an issue. In ARMv7a/r there are few "pathological"
+ * instructions, listed below, that jumps on itself and that can have side
+ * effects if executed more than once; but they are not considered as real use
+ * cases generated by a compiler.
+ * Some example:
+ * - 'pop {pc}' or multi register 'pop' including PC, when the new PC value is
+ *   the same value of current PC. The single step will not stop at the first
+ *   'pop' and will continue taking values from the stack, modifying SP at each
+ *   iteration.
+ * - 'rfeda', 'rfedb', 'rfeia', 'rfeib', when the new PC value is the same
+ *   value of current PC. The register provided to the instruction (usually SP)
+ *   will be incremented or decremented at each iteration.
+ *
+ * TODO: fix exit in case of error, cleaning HW breakpoints.
+ */
+static int cortex_a_step(struct target *target, bool current, target_addr_t address,
+	bool handle_breakpoints)
 {
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 	struct armv7a_common *armv7a = target_to_armv7a(target);
@@ -1146,11 +1213,11 @@ static int cortex_a_step(struct target *target, int current, target_addr_t addre
 	int retval;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
-	/* current = 1: continue on current pc, otherwise continue at <address> */
+	/* current = true: continue on current pc, otherwise continue at <address> */
 	r = arm->pc;
 	if (!current)
 		buf_set_u32(r->value, 0, 32, address);
@@ -1161,7 +1228,7 @@ static int cortex_a_step(struct target *target, int current, target_addr_t addre
 	 * But since Cortex-A uses breakpoint for single step,
 	 * we MUST handle breakpoints.
 	 */
-	handle_breakpoints = 1;
+	handle_breakpoints = true;
 	if (handle_breakpoints) {
 		breakpoint = breakpoint_find(target, address);
 		if (breakpoint)
@@ -1188,19 +1255,38 @@ static int cortex_a_step(struct target *target, int current, target_addr_t addre
 
 	target->debug_reason = DBG_REASON_SINGLESTEP;
 
-	retval = cortex_a_resume(target, 1, address, 0, 0);
+	retval = cortex_a_resume(target, true, address, false, false);
 	if (retval != ERROR_OK)
 		return retval;
 
-	int64_t then = timeval_ms();
+	// poll at least once before starting the timeout
+	retval = cortex_a_poll(target);
+	if (retval != ERROR_OK)
+		return retval;
+
+	int64_t then = timeval_ms() + 100;
 	while (target->state != TARGET_HALTED) {
+		if (timeval_ms() > then)
+			break;
+
 		retval = cortex_a_poll(target);
 		if (retval != ERROR_OK)
 			return retval;
-		if (target->state == TARGET_HALTED)
-			break;
-		if (timeval_ms() > then + 1000) {
-			LOG_ERROR("timeout waiting for target halt");
+	}
+
+	if (target->state != TARGET_HALTED) {
+		LOG_TARGET_DEBUG(target, "timeout waiting for target halt, try halt");
+
+		retval = cortex_a_halt(target);
+		if (retval != ERROR_OK)
+			return retval;
+
+		retval = cortex_a_poll(target);
+		if (retval != ERROR_OK)
+			return retval;
+
+		if (target->state != TARGET_HALTED) {
+			LOG_TARGET_ERROR(target, "timeout waiting for target halt");
 			return ERROR_FAIL;
 		}
 	}
@@ -1220,9 +1306,6 @@ static int cortex_a_step(struct target *target, int current, target_addr_t addre
 	if (breakpoint)
 		cortex_a_set_breakpoint(target, breakpoint, 0);
 
-	if (target->state != TARGET_HALTED)
-		LOG_DEBUG("target stepped");
-
 	return ERROR_OK;
 }
 
@@ -1230,7 +1313,7 @@ static int cortex_a_restore_context(struct target *target, bool bpwp)
 {
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 
-	LOG_DEBUG(" ");
+	LOG_TARGET_DEBUG(target, " ");
 
 	if (armv7a->pre_restore_context)
 		armv7a->pre_restore_context(target);
@@ -1267,6 +1350,14 @@ static int cortex_a_set_breakpoint(struct target *target,
 			return ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 		}
 		breakpoint_hw_set(breakpoint, brp_i);
+		if (breakpoint->length == 3) {
+			/* Thumb-2 breakpoint: fixup to length 4 if word aligned,
+			 * set byte mask for length 2 if unaligned */
+			if (IS_ALIGNED(breakpoint->address, 4))
+				breakpoint->length = 4;
+			else
+				breakpoint->length = 2;
+		}
 		if (breakpoint->length == 2)
 			byte_addr_select = (3 << (breakpoint->address & 0x02));
 		control = ((matchmode & 0x7) << 20)
@@ -1275,13 +1366,13 @@ static int cortex_a_set_breakpoint(struct target *target,
 		brp_list[brp_i].used = true;
 		brp_list[brp_i].value = (breakpoint->address & 0xFFFFFFFC);
 		brp_list[brp_i].control = control;
-		retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-				+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
+		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+				armv7a->debug_base + CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
 				brp_list[brp_i].value);
 		if (retval != ERROR_OK)
 			return retval;
-		retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-				+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
+		retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+				armv7a->debug_base + CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
 				brp_list[brp_i].control);
 		if (retval != ERROR_OK)
 			return retval;
@@ -1290,21 +1381,34 @@ static int cortex_a_set_breakpoint(struct target *target,
 			brp_list[brp_i].value);
 	} else if (breakpoint->type == BKPT_SOFT) {
 		uint8_t code[4];
-		/* length == 2: Thumb breakpoint */
-		if (breakpoint->length == 2)
+		if (breakpoint->length == 2) {
+			/* length == 2: Thumb breakpoint */
 			buf_set_u32(code, 0, 32, ARMV5_T_BKPT(0x11));
-		else
-		/* length == 3: Thumb-2 breakpoint, actual encoding is
-		 * a regular Thumb BKPT instruction but we replace a
-		 * 32bit Thumb-2 instruction, so fix-up the breakpoint
-		 * length
-		 */
-		if (breakpoint->length == 3) {
+		} else if (breakpoint->length == 3) {
+			/* length == 3: Thumb-2 breakpoint, actual encoding is
+			 * a regular Thumb BKPT instruction but we replace a
+			 * 32bit Thumb-2 instruction, so fix-up the breakpoint
+			 * length
+			 */
 			buf_set_u32(code, 0, 32, ARMV5_T_BKPT(0x11));
 			breakpoint->length = 4;
-		} else
+		} else {
 			/* length == 4, normal ARM breakpoint */
 			buf_set_u32(code, 0, 32, ARMV5_BKPT(0x11));
+		}
+
+		/*
+		 * ARMv7-A/R fetches instructions in little-endian on both LE and BE CPUs.
+		 * But Cortex-R4 and Cortex-R5 big-endian require BE instructions.
+		 * https://developer.arm.com/documentation/den0042/a/Coding-for-Cortex-R-Processors/Endianness
+		 * https://developer.arm.com/documentation/den0013/d/Porting/Endianness
+		 */
+		if ((((cortex_a->cpuid & CPUDBG_CPUID_MASK) == CPUDBG_CPUID_CORTEX_R4) ||
+		    ((cortex_a->cpuid & CPUDBG_CPUID_MASK) == CPUDBG_CPUID_CORTEX_R5)) &&
+		    target->endianness == TARGET_BIG_ENDIAN) {
+			// In place swapping is allowed
+			buf_bswap32(code, code, 4);
+		}
 
 		retval = target_read_memory(target,
 				breakpoint->address & 0xFFFFFFFE,
@@ -1314,10 +1418,7 @@ static int cortex_a_set_breakpoint(struct target *target,
 			return retval;
 
 		/* make sure data cache is cleaned & invalidated down to PoC */
-		if (!armv7a->armv7a_mmu.armv7a_cache.auto_cache_enabled) {
-			armv7a_cache_flush_virt(target, breakpoint->address,
-						breakpoint->length);
-		}
+		armv7a_cache_flush_virt(target, breakpoint->address, breakpoint->length);
 
 		retval = target_write_memory(target,
 				breakpoint->address & 0xFFFFFFFE,
@@ -1326,10 +1427,8 @@ static int cortex_a_set_breakpoint(struct target *target,
 			return retval;
 
 		/* update i-cache at breakpoint location */
-		armv7a_l1_d_cache_inval_virt(target, breakpoint->address,
-					breakpoint->length);
-		armv7a_l1_i_cache_inval_virt(target, breakpoint->address,
-						 breakpoint->length);
+		armv7a_l1_d_cache_inval_virt(target, breakpoint->address, breakpoint->length);
+		armv7a_l1_i_cache_inval_virt(target, breakpoint->address, breakpoint->length);
 
 		breakpoint->is_set = true;
 	}
@@ -1369,13 +1468,13 @@ static int cortex_a_set_context_breakpoint(struct target *target,
 	brp_list[brp_i].used = true;
 	brp_list[brp_i].value = (breakpoint->asid);
 	brp_list[brp_i].control = control;
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
 			brp_list[brp_i].value);
 	if (retval != ERROR_OK)
 		return retval;
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
 			brp_list[brp_i].control);
 	if (retval != ERROR_OK)
 		return retval;
@@ -1435,13 +1534,13 @@ static int cortex_a_set_hybrid_breakpoint(struct target *target, struct breakpoi
 	brp_list[brp_1].used = true;
 	brp_list[brp_1].value = (breakpoint->asid);
 	brp_list[brp_1].control = control_ctx;
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_1].brpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_BVR_BASE + 4 * brp_list[brp_1].brpn,
 			brp_list[brp_1].value);
 	if (retval != ERROR_OK)
 		return retval;
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_1].brpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_BCR_BASE + 4 * brp_list[brp_1].brpn,
 			brp_list[brp_1].control);
 	if (retval != ERROR_OK)
 		return retval;
@@ -1453,13 +1552,13 @@ static int cortex_a_set_hybrid_breakpoint(struct target *target, struct breakpoi
 	brp_list[brp_2].used = true;
 	brp_list[brp_2].value = (breakpoint->address & 0xFFFFFFFC);
 	brp_list[brp_2].control = control_iva;
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BVR_BASE + 4 * brp_list[brp_2].brpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_BVR_BASE + 4 * brp_list[brp_2].brpn,
 			brp_list[brp_2].value);
 	if (retval != ERROR_OK)
 		return retval;
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_BCR_BASE + 4 * brp_list[brp_2].brpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_BCR_BASE + 4 * brp_list[brp_2].brpn,
 			brp_list[brp_2].control);
 	if (retval != ERROR_OK)
 		return retval;
@@ -1492,13 +1591,13 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 			brp_list[brp_i].used = false;
 			brp_list[brp_i].value = 0;
 			brp_list[brp_i].control = 0;
-			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
+			retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+					armv7a->debug_base + CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
 					brp_list[brp_i].control);
 			if (retval != ERROR_OK)
 				return retval;
-			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
+			retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+					armv7a->debug_base + CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
 					brp_list[brp_i].value);
 			if (retval != ERROR_OK)
 				return retval;
@@ -1511,13 +1610,13 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 			brp_list[brp_j].used = false;
 			brp_list[brp_j].value = 0;
 			brp_list[brp_j].control = 0;
-			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_j].brpn,
+			retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+					armv7a->debug_base + CPUDBG_BCR_BASE + 4 * brp_list[brp_j].brpn,
 					brp_list[brp_j].control);
 			if (retval != ERROR_OK)
 				return retval;
-			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_j].brpn,
+			retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+					armv7a->debug_base + CPUDBG_BVR_BASE + 4 * brp_list[brp_j].brpn,
 					brp_list[brp_j].value);
 			if (retval != ERROR_OK)
 				return retval;
@@ -1536,13 +1635,13 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 			brp_list[brp_i].used = false;
 			brp_list[brp_i].value = 0;
 			brp_list[brp_i].control = 0;
-			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
+			retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+					armv7a->debug_base + CPUDBG_BCR_BASE + 4 * brp_list[brp_i].brpn,
 					brp_list[brp_i].control);
 			if (retval != ERROR_OK)
 				return retval;
-			retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-					+ CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
+			retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+					armv7a->debug_base + CPUDBG_BVR_BASE + 4 * brp_list[brp_i].brpn,
 					brp_list[brp_i].value);
 			if (retval != ERROR_OK)
 				return retval;
@@ -1552,10 +1651,8 @@ static int cortex_a_unset_breakpoint(struct target *target, struct breakpoint *b
 	} else {
 
 		/* make sure data cache is cleaned & invalidated down to PoC */
-		if (!armv7a->armv7a_mmu.armv7a_cache.auto_cache_enabled) {
-			armv7a_cache_flush_virt(target, breakpoint->address,
+		armv7a_cache_flush_virt(target, breakpoint->address,
 						breakpoint->length);
-		}
 
 		/* restore original instruction (kept in target endianness) */
 		if (breakpoint->length == 4) {
@@ -1672,7 +1769,6 @@ static int cortex_a_set_watchpoint(struct target *target, struct watchpoint *wat
 	uint32_t address;
 	uint8_t address_mask;
 	uint8_t byte_address_select;
-	uint8_t load_store_access_control = 0x3;
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 	struct armv7a_common *armv7a = &cortex_a->armv7a_common;
 	struct cortex_a_wrp *wrp_list = cortex_a->wrp_list;
@@ -1730,6 +1826,22 @@ static int cortex_a_set_watchpoint(struct target *target, struct watchpoint *wat
 		break;
 	}
 
+	uint8_t load_store_access_control;
+	switch (watchpoint->rw) {
+	case WPT_READ:
+		load_store_access_control = 1;
+		break;
+	case WPT_WRITE:
+		load_store_access_control = 2;
+		break;
+	case WPT_ACCESS:
+		load_store_access_control = 3;
+		break;
+	default:
+		LOG_ERROR("BUG: watchpoint->rw neither read, write nor access");
+		return ERROR_FAIL;
+	};
+
 	watchpoint_set(watchpoint, wrp_i);
 	control = (address_mask << 24) |
 		(byte_address_select << 5) |
@@ -1739,14 +1851,14 @@ static int cortex_a_set_watchpoint(struct target *target, struct watchpoint *wat
 	wrp_list[wrp_i].value = address;
 	wrp_list[wrp_i].control = control;
 
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_WVR_BASE + 4 * wrp_list[wrp_i].wrpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_WVR_BASE + 4 * wrp_list[wrp_i].wrpn,
 			wrp_list[wrp_i].value);
 	if (retval != ERROR_OK)
 		return retval;
 
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_WCR_BASE + 4 * wrp_list[wrp_i].wrpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_WCR_BASE + 4 * wrp_list[wrp_i].wrpn,
 			wrp_list[wrp_i].control);
 	if (retval != ERROR_OK)
 		return retval;
@@ -1788,13 +1900,13 @@ static int cortex_a_unset_watchpoint(struct target *target, struct watchpoint *w
 	wrp_list[wrp_i].used = false;
 	wrp_list[wrp_i].value = 0;
 	wrp_list[wrp_i].control = 0;
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_WCR_BASE + 4 * wrp_list[wrp_i].wrpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_WCR_BASE + 4 * wrp_list[wrp_i].wrpn,
 			wrp_list[wrp_i].control);
 	if (retval != ERROR_OK)
 		return retval;
-	retval = cortex_a_dap_write_memap_register_u32(target, armv7a->debug_base
-			+ CPUDBG_WVR_BASE + 4 * wrp_list[wrp_i].wrpn,
+	retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
+			armv7a->debug_base + CPUDBG_WVR_BASE + 4 * wrp_list[wrp_i].wrpn,
 			wrp_list[wrp_i].value);
 	if (retval != ERROR_OK)
 		return retval;
@@ -1884,7 +1996,7 @@ static int cortex_a_assert_reset(struct target *target)
 	}
 
 	/* registers are now invalid */
-	if (target_was_examined(target))
+	if (armv7a->arm.core_cache)
 		register_cache_invalidate(armv7a->arm.core_cache);
 
 	target->state = TARGET_RESET;
@@ -2224,7 +2336,7 @@ static int cortex_a_write_cpu_memory(struct target *target,
 	LOG_DEBUG("Writing CPU memory address 0x%" PRIx32 " size %"  PRIu32 " count %"  PRIu32,
 			  address, size, count);
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -2271,19 +2383,20 @@ static int cortex_a_write_cpu_memory(struct target *target,
 	} else {
 		/* Use slow path. Adjust size for aligned accesses */
 		switch (address % 4) {
-			case 1:
-			case 3:
-				count *= size;
-				size = 1;
-				break;
-			case 2:
-				if (size == 4) {
-					count *= 2;
-					size = 2;
-				}
-			case 0:
-			default:
-				break;
+		case 1:
+		case 3:
+			count *= size;
+			size = 1;
+			break;
+		case 2:
+			if (size == 4) {
+				count *= 2;
+				size = 2;
+			}
+			break;
+		case 0:
+		default:
+			break;
 		}
 		retval = cortex_a_write_cpu_memory_slow(target, size, count, buffer, &dscr);
 	}
@@ -2541,7 +2654,7 @@ static int cortex_a_read_cpu_memory(struct target *target,
 	LOG_DEBUG("Reading CPU memory address 0x%" PRIx32 " size %"  PRIu32 " count %"  PRIu32,
 			  address, size, count);
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -2588,20 +2701,20 @@ static int cortex_a_read_cpu_memory(struct target *target,
 	} else {
 		/* Use slow path. Adjust size for aligned accesses */
 		switch (address % 4) {
-			case 1:
-			case 3:
-				count *= size;
-				size = 1;
-				break;
-			case 2:
-				if (size == 4) {
-					count *= 2;
-					size = 2;
-				}
-				break;
-			case 0:
-			default:
-				break;
+		case 1:
+		case 3:
+			count *= size;
+			size = 1;
+			break;
+		case 2:
+			if (size == 4) {
+				count *= 2;
+				size = 2;
+			}
+			break;
+		case 0:
+		default:
+			break;
 		}
 		retval = cortex_a_read_cpu_memory_slow(target, size, count, buffer, &dscr);
 	}
@@ -2691,9 +2804,9 @@ static int cortex_a_read_phys_memory(struct target *target,
 		address, size, count);
 
 	/* read memory through the CPU */
-	cortex_a_prep_memaccess(target, 1);
+	cortex_a_prep_memaccess(target, true);
 	retval = cortex_a_read_cpu_memory(target, address, size, count, buffer);
-	cortex_a_post_memaccess(target, 1);
+	cortex_a_post_memaccess(target, true);
 
 	return retval;
 }
@@ -2707,9 +2820,9 @@ static int cortex_a_read_memory(struct target *target, target_addr_t address,
 	LOG_DEBUG("Reading memory at address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
-	cortex_a_prep_memaccess(target, 0);
+	cortex_a_prep_memaccess(target, false);
 	retval = cortex_a_read_cpu_memory(target, address, size, count, buffer);
-	cortex_a_post_memaccess(target, 0);
+	cortex_a_post_memaccess(target, false);
 
 	return retval;
 }
@@ -2727,9 +2840,9 @@ static int cortex_a_write_phys_memory(struct target *target,
 		address, size, count);
 
 	/* write memory through the CPU */
-	cortex_a_prep_memaccess(target, 1);
+	cortex_a_prep_memaccess(target, true);
 	retval = cortex_a_write_cpu_memory(target, address, size, count, buffer);
-	cortex_a_post_memaccess(target, 1);
+	cortex_a_post_memaccess(target, true);
 
 	return retval;
 }
@@ -2743,12 +2856,9 @@ static int cortex_a_write_memory(struct target *target, target_addr_t address,
 	LOG_DEBUG("Writing memory at address " TARGET_ADDR_FMT "; size %" PRIu32 "; count %" PRIu32,
 		address, size, count);
 
-	/* memory writes bypass the caches, must flush before writing */
-	armv7a_cache_auto_flush_on_write(target, address, size * count);
-
-	cortex_a_prep_memaccess(target, 0);
+	cortex_a_prep_memaccess(target, false);
 	retval = cortex_a_write_cpu_memory(target, address, size, count, buffer);
-	cortex_a_post_memaccess(target, 0);
+	cortex_a_post_memaccess(target, false);
 	return retval;
 }
 
@@ -2898,14 +3008,12 @@ static int cortex_a_examine_first(struct target *target)
 	armv7a->debug_ap->memaccess_tck = 80;
 
 	if (!target->dbgbase_set) {
-		LOG_DEBUG("%s's dbgbase is not set, trying to detect using the ROM table",
-			  target->cmd_name);
+		LOG_TARGET_DEBUG(target, "dbgbase is not set, trying to detect using the ROM table");
 		/* Lookup Processor DAP */
 		retval = dap_lookup_cs_component(armv7a->debug_ap, ARM_CS_C9_DEVTYPE_CORE_DEBUG,
 				&armv7a->debug_base, target->coreid);
 		if (retval != ERROR_OK) {
-			LOG_ERROR("Can't detect %s's dbgbase from the ROM table; you need to specify it explicitly.",
-				  target->cmd_name);
+			LOG_TARGET_ERROR(target, "Can't detect dbgbase from the ROM table; you need to specify it explicitly");
 			return retval;
 		}
 		LOG_DEBUG("Detected core %" PRId32 " dbgbase: " TARGET_ADDR_FMT,
@@ -2914,8 +3022,9 @@ static int cortex_a_examine_first(struct target *target)
 		armv7a->debug_base = target->dbgbase;
 
 	if ((armv7a->debug_base & (1UL<<31)) == 0)
-		LOG_WARNING("Debug base address for target %s has bit 31 set to 0. Access to debug registers will likely fail!\n"
-			    "Please fix the target configuration.", target_name(target));
+		LOG_TARGET_WARNING(target,
+			"Debug base address has bit 31 set to 0. Access to debug registers will likely fail!\n"
+			"Please fix the target configuration");
 
 	retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
 			armv7a->debug_base + CPUDBG_DIDR, &didr);
@@ -2941,29 +3050,29 @@ static int cortex_a_examine_first(struct target *target)
 				    armv7a->debug_base + CPUDBG_PRSR, &dbg_osreg);
 	if (retval != ERROR_OK)
 		return retval;
-	LOG_DEBUG("target->coreid %" PRId32 " DBGPRSR  0x%" PRIx32, target->coreid, dbg_osreg);
+	LOG_TARGET_DEBUG(target, "DBGPRSR  0x%" PRIx32, dbg_osreg);
 
 	if ((dbg_osreg & PRSR_POWERUP_STATUS) == 0) {
-		LOG_ERROR("target->coreid %" PRId32 " powered down!", target->coreid);
+		LOG_TARGET_ERROR(target, "powered down!");
 		target->state = TARGET_UNKNOWN; /* TARGET_NO_POWER? */
 		return ERROR_TARGET_INIT_FAILED;
 	}
 
 	if (dbg_osreg & PRSR_STICKY_RESET_STATUS)
-		LOG_DEBUG("target->coreid %" PRId32 " was reset!", target->coreid);
+		LOG_TARGET_DEBUG(target, "was reset!");
 
 	/* Read DBGOSLSR and check if OSLK is implemented */
 	retval = mem_ap_read_atomic_u32(armv7a->debug_ap,
 				armv7a->debug_base + CPUDBG_OSLSR, &dbg_osreg);
 	if (retval != ERROR_OK)
 		return retval;
-	LOG_DEBUG("target->coreid %" PRId32 " DBGOSLSR 0x%" PRIx32, target->coreid, dbg_osreg);
+	LOG_TARGET_DEBUG(target, "DBGOSLSR 0x%" PRIx32, dbg_osreg);
 
 	/* check if OS Lock is implemented */
 	if ((dbg_osreg & OSLSR_OSLM) == OSLSR_OSLM0 || (dbg_osreg & OSLSR_OSLM) == OSLSR_OSLM1) {
 		/* check if OS Lock is set */
 		if (dbg_osreg & OSLSR_OSLK) {
-			LOG_DEBUG("target->coreid %" PRId32 " OSLock set! Trying to unlock", target->coreid);
+			LOG_TARGET_DEBUG(target, "OSLock set! Trying to unlock");
 
 			retval = mem_ap_write_atomic_u32(armv7a->debug_ap,
 							armv7a->debug_base + CPUDBG_OSLAR,
@@ -2974,8 +3083,7 @@ static int cortex_a_examine_first(struct target *target)
 
 			/* if we fail to access the register or cannot reset the OSLK bit, bail out */
 			if (retval != ERROR_OK || (dbg_osreg & OSLSR_OSLK) != 0) {
-				LOG_ERROR("target->coreid %" PRId32 " OSLock sticky, core not powered?",
-						target->coreid);
+				LOG_TARGET_ERROR(target, "OSLock sticky, core not powered?");
 				target->state = TARGET_UNKNOWN; /* TARGET_NO_POWER? */
 				return ERROR_TARGET_INIT_FAILED;
 			}
@@ -2988,13 +3096,11 @@ static int cortex_a_examine_first(struct target *target)
 		return retval;
 
 	if (dbg_idpfr1 & 0x000000f0) {
-		LOG_DEBUG("target->coreid %" PRId32 " has security extensions",
-				target->coreid);
+		LOG_TARGET_DEBUG(target, "has security extensions");
 		armv7a->arm.core_type = ARM_CORE_TYPE_SEC_EXT;
 	}
 	if (dbg_idpfr1 & 0x0000f000) {
-		LOG_DEBUG("target->coreid %" PRId32 " has virtualization extensions",
-				target->coreid);
+		LOG_TARGET_DEBUG(target, "has virtualization extensions");
 		/*
 		 * overwrite and simplify the checks.
 		 * virtualization extensions require implementation of security extension
@@ -3105,7 +3211,7 @@ static int cortex_a_init_arch_info(struct target *target,
 	return ERROR_OK;
 }
 
-static int cortex_a_target_create(struct target *target, Jim_Interp *interp)
+static int cortex_a_target_create(struct target *target)
 {
 	struct cortex_a_common *cortex_a;
 	struct adiv5_private_config *pc;
@@ -3127,7 +3233,7 @@ static int cortex_a_target_create(struct target *target, Jim_Interp *interp)
 	return cortex_a_init_arch_info(target, cortex_a, pc->dap);
 }
 
-static int cortex_r4_target_create(struct target *target, Jim_Interp *interp)
+static int cortex_r4_target_create(struct target *target)
 {
 	struct cortex_a_common *cortex_a;
 	struct adiv5_private_config *pc;
@@ -3177,17 +3283,17 @@ static void cortex_a_deinit_target(struct target *target)
 	free(cortex_a);
 }
 
-static int cortex_a_mmu(struct target *target, int *enabled)
+static int cortex_a_mmu(struct target *target, bool *enabled)
 {
 	struct armv7a_common *armv7a = target_to_armv7a(target);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("%s: target not halted", __func__);
-		return ERROR_TARGET_INVALID;
+		LOG_TARGET_ERROR(target, "not halted");
+		return ERROR_TARGET_NOT_HALTED;
 	}
 
 	if (armv7a->is_armv7r)
-		*enabled = 0;
+		*enabled = false;
 	else
 		*enabled = target_to_cortex_a(target)->armv7a_common.armv7a_mmu.mmu_enabled;
 
@@ -3198,7 +3304,7 @@ static int cortex_a_virt2phys(struct target *target,
 	target_addr_t virt, target_addr_t *phys)
 {
 	int retval;
-	int mmu_enabled = 0;
+	bool mmu_enabled = false;
 
 	/*
 	 * If the MMU was not enabled at debug entry, there is no
@@ -3213,7 +3319,7 @@ static int cortex_a_virt2phys(struct target *target,
 	}
 
 	/* mmu must be enable in order to get a correct translation */
-	retval = cortex_a_mmu_modify(target, 1);
+	retval = cortex_a_mmu_modify(target, true);
 	if (retval != ERROR_OK)
 		return retval;
 	return armv7a_mmu_translate_va_pa(target, (uint32_t)virt,
@@ -3246,15 +3352,15 @@ COMMAND_HANDLER(handle_cortex_a_mask_interrupts_command)
 	struct target *target = get_current_target(CMD_CTX);
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 
-	static const struct jim_nvp nvp_maskisr_modes[] = {
+	static const struct nvp nvp_maskisr_modes[] = {
 		{ .name = "off", .value = CORTEX_A_ISRMASK_OFF },
 		{ .name = "on", .value = CORTEX_A_ISRMASK_ON },
 		{ .name = NULL, .value = -1 },
 	};
-	const struct jim_nvp *n;
+	const struct nvp *n;
 
 	if (CMD_ARGC > 0) {
-		n = jim_nvp_name2value_simple(nvp_maskisr_modes, CMD_ARGV[0]);
+		n = nvp_name2value(nvp_maskisr_modes, CMD_ARGV[0]);
 		if (!n->name) {
 			LOG_ERROR("Unknown parameter: %s - should be off or on", CMD_ARGV[0]);
 			return ERROR_COMMAND_SYNTAX_ERROR;
@@ -3263,7 +3369,7 @@ COMMAND_HANDLER(handle_cortex_a_mask_interrupts_command)
 		cortex_a->isrmasking_mode = n->value;
 	}
 
-	n = jim_nvp_value2name_simple(nvp_maskisr_modes, cortex_a->isrmasking_mode);
+	n = nvp_value2name(nvp_maskisr_modes, cortex_a->isrmasking_mode);
 	command_print(CMD, "cortex_a interrupt mask %s", n->name);
 
 	return ERROR_OK;
@@ -3274,22 +3380,22 @@ COMMAND_HANDLER(handle_cortex_a_dacrfixup_command)
 	struct target *target = get_current_target(CMD_CTX);
 	struct cortex_a_common *cortex_a = target_to_cortex_a(target);
 
-	static const struct jim_nvp nvp_dacrfixup_modes[] = {
+	static const struct nvp nvp_dacrfixup_modes[] = {
 		{ .name = "off", .value = CORTEX_A_DACRFIXUP_OFF },
 		{ .name = "on", .value = CORTEX_A_DACRFIXUP_ON },
 		{ .name = NULL, .value = -1 },
 	};
-	const struct jim_nvp *n;
+	const struct nvp *n;
 
 	if (CMD_ARGC > 0) {
-		n = jim_nvp_name2value_simple(nvp_dacrfixup_modes, CMD_ARGV[0]);
+		n = nvp_name2value(nvp_dacrfixup_modes, CMD_ARGV[0]);
 		if (!n->name)
 			return ERROR_COMMAND_SYNTAX_ERROR;
 		cortex_a->dacrfixup_mode = n->value;
 
 	}
 
-	n = jim_nvp_value2name_simple(nvp_dacrfixup_modes, cortex_a->dacrfixup_mode);
+	n = nvp_value2name(nvp_dacrfixup_modes, cortex_a->dacrfixup_mode);
 	command_print(CMD, "cortex_a domain access control fixup %s", n->name);
 
 	return ERROR_OK;

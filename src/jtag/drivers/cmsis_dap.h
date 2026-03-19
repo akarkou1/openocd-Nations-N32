@@ -52,23 +52,34 @@ struct cmsis_dap {
 	unsigned int pending_fifo_block_count;
 
 	uint16_t caps;
-	uint8_t mode;
+
 	uint32_t swo_buf_sz;
 	bool trace_enabled;
+};
+
+/* Read mode */
+enum cmsis_dap_blocking {
+	CMSIS_DAP_NON_BLOCKING,
+	CMSIS_DAP_BLOCKING
 };
 
 struct cmsis_dap_backend {
 	const char *name;
 	int (*open)(struct cmsis_dap *dap, uint16_t vids[], uint16_t pids[], const char *serial);
 	void (*close)(struct cmsis_dap *dap);
-	int (*read)(struct cmsis_dap *dap, int timeout_ms);
+	int (*read)(struct cmsis_dap *dap, int transfer_timeout_ms,
+				enum cmsis_dap_blocking blocking);
 	int (*write)(struct cmsis_dap *dap, int len, int timeout_ms);
 	int (*packet_buffer_alloc)(struct cmsis_dap *dap, unsigned int pkt_sz);
+	void (*packet_buffer_free)(struct cmsis_dap *dap);
+	void (*cancel_all)(struct cmsis_dap *dap);
 };
 
 extern const struct cmsis_dap_backend cmsis_dap_hid_backend;
 extern const struct cmsis_dap_backend cmsis_dap_usb_backend;
+extern const struct cmsis_dap_backend cmsis_dap_tcp_backend;
 extern const struct command_registration cmsis_dap_usb_subcommand_handlers[];
+extern const struct command_registration cmsis_dap_tcp_subcommand_handlers[];
 
 #define REPORT_ID_SIZE   1
 

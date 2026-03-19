@@ -73,40 +73,40 @@ int armv7a_mmu_translate_va_pa(struct target *target, uint32_t va,
 			NS == 1 ? "not" : "",
 			SS == 0 ? "not" : "");
 		switch (OUTER) {
-			case 0:
-				LOG_INFO("outer: Non-Cacheable");
-				break;
-			case 1:
-				LOG_INFO("outer: Write-Back, Write-Allocate");
-				break;
-			case 2:
-				LOG_INFO("outer: Write-Through, No Write-Allocate");
-				break;
-			case 3:
-				LOG_INFO("outer: Write-Back, no Write-Allocate");
-				break;
+		case 0:
+			LOG_INFO("outer: Non-Cacheable");
+			break;
+		case 1:
+			LOG_INFO("outer: Write-Back, Write-Allocate");
+			break;
+		case 2:
+			LOG_INFO("outer: Write-Through, No Write-Allocate");
+			break;
+		case 3:
+			LOG_INFO("outer: Write-Back, no Write-Allocate");
+			break;
 		}
 		switch (INNER) {
-			case 0:
-				LOG_INFO("inner: Non-Cacheable");
-				break;
-			case 1:
-				LOG_INFO("inner: Strongly-ordered");
-				break;
-			case 3:
-				LOG_INFO("inner: Device");
-				break;
-			case 5:
-				LOG_INFO("inner: Write-Back, Write-Allocate");
-				break;
-			case 6:
-				LOG_INFO("inner:  Write-Through");
-				break;
-			case 7:
-				LOG_INFO("inner: Write-Back, no Write-Allocate");
-				break;
-			default:
-				LOG_INFO("inner: %" PRIx32 " ???", INNER);
+		case 0:
+			LOG_INFO("inner: Non-Cacheable");
+			break;
+		case 1:
+			LOG_INFO("inner: Strongly-ordered");
+			break;
+		case 3:
+			LOG_INFO("inner: Device");
+			break;
+		case 5:
+			LOG_INFO("inner: Write-Back, Write-Allocate");
+			break;
+		case 6:
+			LOG_INFO("inner:  Write-Through");
+			break;
+		case 7:
+			LOG_INFO("inner: Write-Back, no Write-Allocate");
+			break;
+		default:
+			LOG_INFO("inner: %" PRIx32 " ???", INNER);
 		}
 	}
 
@@ -214,7 +214,7 @@ COMMAND_HANDLER(armv7a_mmu_dump_table)
 			max_pt_idx -= 1;
 		}
 	} else {
-		if (mmu->cached != 1) {
+		if (!mmu->cached) {
 			LOG_ERROR("TTB not cached!");
 			return ERROR_FAIL;
 		}
@@ -260,8 +260,7 @@ COMMAND_HANDLER(armv7a_mmu_dump_table)
 		/* skip empty entries in the first level table */
 		if ((first_lvl_descriptor & 3) == 0) {
 			pt_idx++;
-		} else
-		if ((first_lvl_descriptor & 0x40002) == 2) {
+		} else if ((first_lvl_descriptor & 0x40002) == 2) {
 			/* section descriptor */
 			uint32_t va_range = 1024*1024-1; /* 1MB range */
 			uint32_t va_start = pt_idx << 20;
@@ -273,8 +272,7 @@ COMMAND_HANDLER(armv7a_mmu_dump_table)
 			LOG_USER("SECT: VA[%8.8"PRIx32" -- %8.8"PRIx32"]: PA[%8.8"PRIx32" -- %8.8"PRIx32"] %s",
 				va_start, va_end, pa_start, pa_end, l1_desc_bits_to_string(first_lvl_descriptor, afe));
 			pt_idx++;
-		} else
-		if ((first_lvl_descriptor & 0x40002) == 0x40002) {
+		} else if ((first_lvl_descriptor & 0x40002) == 0x40002) {
 			/* supersection descriptor */
 			uint32_t va_range = 16*1024*1024-1; /* 16MB range */
 			uint32_t va_start = pt_idx << 20;
@@ -310,8 +308,7 @@ COMMAND_HANDLER(armv7a_mmu_dump_table)
 				if ((second_lvl_descriptor & 3) == 0) {
 					/* skip entry */
 					pt2_idx++;
-				} else
-				if ((second_lvl_descriptor & 3) == 1) {
+				} else if ((second_lvl_descriptor & 3) == 1) {
 					/* large page */
 					uint32_t va_range = 64*1024-1; /* 64KB range */
 					uint32_t va_start = (pt_idx << 20) + (pt2_idx << 12);

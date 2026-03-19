@@ -24,16 +24,6 @@ implementation.
 */
 
 /* ESP32_S3 memory map */
-#define ESP32_S3_IRAM_LOW               0x40370000
-#define ESP32_S3_IRAM_HIGH              0x403E0000
-#define ESP32_S3_IROM_MASK_LOW          0x40000000
-#define ESP32_S3_IROM_MASK_HIGH         0x40060000
-#define ESP32_S3_DRAM_LOW               0x3FC88000
-#define ESP32_S3_DRAM_HIGH              0x3FD00000
-#define ESP32_S3_RTC_IRAM_LOW           0x600FE000
-#define ESP32_S3_RTC_IRAM_HIGH          0x60100000
-#define ESP32_S3_RTC_DRAM_LOW           0x600FE000
-#define ESP32_S3_RTC_DRAM_HIGH          0x60100000
 #define ESP32_S3_RTC_DATA_LOW           0x50000000
 #define ESP32_S3_RTC_DATA_HIGH          0x50002000
 #define ESP32_S3_EXTRAM_DATA_LOW        0x3D000000
@@ -185,7 +175,8 @@ static int esp32s3_soc_reset(struct target *target)
 	LOG_DEBUG("Resuming the target");
 	xtensa = target_to_xtensa(target);
 	xtensa->suppress_dsr_errors = true;
-	res = xtensa_resume(target, 0, ESP32_S3_RTC_SLOW_MEM_BASE + 4, 0, 0);
+	res = xtensa_resume(target, false, ESP32_S3_RTC_SLOW_MEM_BASE + 4, false,
+		false);
 	xtensa->suppress_dsr_errors = false;
 	if (res != ERROR_OK) {
 		LOG_ERROR("Failed to run stub (%d)!", res);
@@ -202,8 +193,8 @@ static int esp32s3_soc_reset(struct target *target)
 		xtensa_poll(target);
 		if (timeval_ms() >= timeout) {
 			LOG_TARGET_ERROR(target,
-				"Timed out waiting for CPU to be reset, target state=%d",
-				target->state);
+				"Timed out waiting for CPU to be reset, target state %s",
+				target_state_name(target));
 			get_timeout = true;
 			break;
 		}
@@ -283,7 +274,10 @@ static int esp32s3_disable_wdts(struct target *target)
 
 static int esp32s3_on_halt(struct target *target)
 {
-	return esp32s3_disable_wdts(target);
+	int ret = esp32s3_disable_wdts(target);
+	if (ret == ERROR_OK)
+		ret = esp_xtensa_smp_on_halt(target);
+	return ret;
 }
 
 static int esp32s3_arch_state(struct target *target)
@@ -326,7 +320,7 @@ static const struct esp_semihost_ops esp32s3_semihost_ops = {
 	.prepare = esp32s3_disable_wdts
 };
 
-static int esp32s3_target_create(struct target *target, Jim_Interp *interp)
+static int esp32s3_target_create(struct target *target)
 {
 	struct xtensa_debug_module_config esp32s3_dm_cfg = {
 		.dbg_ops = &esp32s3_dbg_ops,
@@ -363,6 +357,11 @@ static const struct command_registration esp32s3_command_handlers[] = {
 	{
 		.usage = "",
 		.chain = esp_xtensa_smp_command_handlers,
+	},
+	{
+		.name = "esp",
+		.usage = "",
+		.chain = esp32_apptrace_command_handlers,
 	},
 	{
 		.name = "esp32",
@@ -407,6 +406,10 @@ struct target_type esp32s3_target = {
 	.get_gdb_arch = xtensa_get_gdb_arch,
 	.get_gdb_reg_list = xtensa_get_gdb_reg_list,
 
+	.run_algorithm = xtensa_run_algorithm,
+	.start_algorithm = xtensa_start_algorithm,
+	.wait_algorithm = xtensa_wait_algorithm,
+
 	.add_breakpoint = esp_xtensa_breakpoint_add,
 	.remove_breakpoint = esp_xtensa_breakpoint_remove,
 
@@ -419,4 +422,5 @@ struct target_type esp32s3_target = {
 	.deinit_target = esp_xtensa_target_deinit,
 
 	.commands = esp32s3_command_handlers,
+	.profiling = esp_xtensa_profiling,
 };

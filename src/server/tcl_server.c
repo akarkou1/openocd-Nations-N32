@@ -230,12 +230,22 @@ static int tcl_input(struct connection *connection)
 #undef ESTR
 		} else {
 			tclc->tc_line[tclc->tc_lineoffset-1] = '\0';
-			command_run_line(connection->cmd_ctx, tclc->tc_line);
+			retval = command_run_line(connection->cmd_ctx, tclc->tc_line);
+
+			if (retval == ERROR_COMMAND_CLOSE_CONNECTION) {
+				/* "shutdown" or "exit" executed.
+				 * Send an empty response - just the response termination character.
+				 */
+				tcl_output(connection, "\x1a", 1);
+				return ERROR_SERVER_REMOTE_CLOSED;
+			}
+
 			result = Jim_GetString(Jim_GetResult(interp), &reslen);
 			retval = tcl_output(connection, result, reslen);
 			if (retval != ERROR_OK)
 				return retval;
-			/* Always output ctrl-z as end of line to allow multiline results */
+
+			/* Signal the end of response by a termination character (ctrl-z) */
 			tcl_output(connection, "\x1a", 1);
 		}
 
@@ -284,6 +294,15 @@ int tcl_init(void)
 	return add_service(&tcl_service_driver, tcl_port, CONNECTION_LIMIT_UNLIMITED, NULL);
 }
 
+bool tcl_is_from_tcl_session(struct command_context *cmd_ctx)
+{
+	if (!cmd_ctx->output_handler_priv)
+		return false;
+
+	struct connection *conn = (struct connection *)cmd_ctx->output_handler_priv;
+	return strcmp(conn->service->name, "tcl") == 0;
+}
+
 COMMAND_HANDLER(handle_tcl_port_command)
 {
 	return CALL_COMMAND_HANDLER(server_pipe_command, &tcl_port);
@@ -297,7 +316,7 @@ COMMAND_HANDLER(handle_tcl_notifications_command)
 	if (CMD_CTX->output_handler_priv)
 		connection = CMD_CTX->output_handler_priv;
 
-	if (connection && !strcmp(connection->service->name, "tcl")) {
+	if (connection && tcl_is_from_tcl_session(CMD_CTX)) {
 		tclc = connection->priv;
 		return CALL_COMMAND_HANDLER(handle_command_parse_bool, &tclc->tc_notify, "Target Notification output ");
 	} else {
@@ -314,7 +333,7 @@ COMMAND_HANDLER(handle_tcl_trace_command)
 	if (CMD_CTX->output_handler_priv)
 		connection = CMD_CTX->output_handler_priv;
 
-	if (connection && !strcmp(connection->service->name, "tcl")) {
+	if (connection && tcl_is_from_tcl_session(CMD_CTX)) {
 		tclc = connection->priv;
 		return CALL_COMMAND_HANDLER(handle_command_parse_bool, &tclc->tc_trace, "Target trace output ");
 	} else {
@@ -323,29 +342,40 @@ COMMAND_HANDLER(handle_tcl_trace_command)
 	}
 }
 
-static const struct command_registration tcl_command_handlers[] = {
+static const struct command_registration tcl_subcommand_handlers[] = {
 	{
-		.name = "tcl_port",
+		.name = "port",
 		.handler = handle_tcl_port_command,
 		.mode = COMMAND_CONFIG,
 		.help = "Specify port on which to listen "
 			"for incoming Tcl syntax.  "
-			"Read help on 'gdb_port'.",
+			"Read help on 'gdb port'.",
 		.usage = "[port_num]",
 	},
 	{
-		.name = "tcl_notifications",
+		.name = "notifications",
 		.handler = handle_tcl_notifications_command,
 		.mode = COMMAND_EXEC,
 		.help = "Target Notification output",
 		.usage = "[on|off]",
 	},
 	{
-		.name = "tcl_trace",
+		.name = "trace",
 		.handler = handle_tcl_trace_command,
 		.mode = COMMAND_EXEC,
 		.help = "Target trace output",
 		.usage = "[on|off]",
+	},
+	COMMAND_REGISTRATION_DONE
+};
+
+static const struct command_registration tcl_command_handlers[] = {
+	{
+		.name = "tcl",
+		.mode = COMMAND_ANY,
+		.help = "tcl command group",
+		.usage = "",
+		.chain = tcl_subcommand_handlers,
 	},
 	COMMAND_REGISTRATION_DONE
 };

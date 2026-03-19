@@ -39,12 +39,12 @@ static int help_flag, version_flag;
 static const struct option long_options[] = {
 	{"help",		no_argument,			&help_flag,		1},
 	{"version",		no_argument,			&version_flag,	1},
-	{"debug",		optional_argument,		0,				'd'},
-	{"file",		required_argument,		0,				'f'},
-	{"search",		required_argument,		0,				's'},
-	{"log_output",	required_argument,		0,				'l'},
-	{"command",		required_argument,		0,				'c'},
-	{0, 0, 0, 0}
+	{"debug",		optional_argument,		NULL,			'd'},
+	{"file",		required_argument,		NULL,			'f'},
+	{"search",		required_argument,		NULL,			's'},
+	{"log_output",	required_argument,		NULL,			'l'},
+	{"command",		required_argument,		NULL,			'c'},
+	{NULL, 0, NULL, 0}
 };
 
 int configuration_output_handler(struct command_context *context, const char *line)
@@ -277,42 +277,44 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 			break;
 
 		switch (c) {
-			case 0:
-				break;
-			case 'h':		/* --help | -h */
-				help_flag = 1;
-				break;
-			case 'v':		/* --version | -v */
-				version_flag = 1;
-				break;
-			case 'f':		/* --file | -f */
-			{
-				char *command = alloc_printf("script {%s}", optarg);
-				add_config_command(command);
-				free(command);
-				break;
-			}
-			case 's':		/* --search | -s */
-				add_script_search_dir(optarg);
-				break;
-			case 'd':		/* --debug | -d */
-			{
-				int retval = command_run_linef(cmd_ctx, "debug_level %s", optarg ? optarg : "3");
-				if (retval != ERROR_OK)
-					return retval;
-				break;
-			}
-			case 'l':		/* --log_output | -l */
-				if (optarg)
-					command_run_linef(cmd_ctx, "log_output %s", optarg);
-				break;
-			case 'c':		/* --command | -c */
-				if (optarg)
-				    add_config_command(optarg);
-				break;
-			default:  /* '?' */
-				/* getopt will emit an error message, all we have to do is bail. */
-				return ERROR_FAIL;
+		case 0:
+			break;
+		case 'h':		/* --help | -h */
+			help_flag = 1;
+			break;
+		case 'v':		/* --version | -v */
+			version_flag = 1;
+			break;
+		case 'f':		/* --file | -f */
+		{
+			char *command = alloc_printf("script {%s}", optarg);
+			add_config_command(command);
+			free(command);
+			break;
+		}
+		case 's':		/* --search | -s */
+			add_script_search_dir(optarg);
+			break;
+		case 'd':		/* --debug | -d */
+		{
+			int retval = command_run_linef(cmd_ctx, "debug_level %s", optarg ? optarg : "3");
+			if (retval != ERROR_OK)
+				return retval;
+			break;
+		}
+		case 'l':		/* --log_output | -l */
+		{
+			int retval = command_run_linef(cmd_ctx, "log_output %s", optarg);
+			if (retval != ERROR_OK)
+				return retval;
+			break;
+		}
+		case 'c':		/* --command | -c */
+			add_config_command(optarg);
+			break;
+		default:  /* '?' */
+			/* getopt will emit an error message, all we have to do is bail. */
+			return ERROR_FAIL;
 		}
 	}
 
@@ -332,7 +334,7 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 		LOG_OUTPUT("             | -d<n>\tset debug level to <level>\n");
 		LOG_OUTPUT("--log_output | -l\tredirect log output to file <name>\n");
 		LOG_OUTPUT("--command    | -c\trun <command>\n");
-		exit(-1);
+		exit(0);
 	}
 
 	if (version_flag) {
@@ -340,6 +342,10 @@ int parse_cmdline_args(struct command_context *cmd_ctx, int argc, char *argv[])
 		/* It is not an error to request the VERSION number. */
 		exit(0);
 	}
+
+	/* dump full command line */
+	for (int i = 0; i < argc; i++)
+		LOG_DEBUG("ARGV[%d] = \"%s\"", i, argv[i]);
 
 	/* paths specified on the command line take precedence over these
 	 * built-in paths

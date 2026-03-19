@@ -19,16 +19,13 @@
 #include "command.h"
 #include "replacements.h"
 #include "time_support.h"
+#include <server/gdb_server.h>
 #include <server/server.h>
 
 #include <stdarg.h>
 
-#ifdef _DEBUG_FREE_SPACE_
-#ifdef HAVE_MALLOC_H
+#if defined(HAVE_MALLINFO) || defined(HAVE_MALLINFO2)
 #include <malloc.h>
-#else
-#error "malloc.h is required to use --enable-malloc-logging"
-#endif
 #endif
 
 int debug_level = LOG_LVL_INFO;
@@ -40,19 +37,20 @@ static int64_t last_time;
 
 static int64_t start;
 
-static const char * const log_strings[6] = {
+static const char * const log_strings[7] = {
 	"User : ",
 	"Error: ",
 	"Warn : ",	/* want a space after each colon, all same width, colons aligned */
 	"Info : ",
 	"Debug: ",
-	"Debug: "
+	"Debug: ",
+	"Debug: ",  /* corresponds to LOG_LVL_DEBUG_USB */
 };
 
-static int count;
+static unsigned int count;
 
 /* forward the log to the listeners */
-static void log_forward(const char *file, unsigned line, const char *function, const char *string)
+static void log_forward(const char *file, unsigned int line, const char *function, const char *string)
 {
 	struct log_callback *cb, *next;
 	cb = log_callbacks;
@@ -62,6 +60,28 @@ static void log_forward(const char *file, unsigned line, const char *function, c
 		cb->fn(cb->priv, file, line, function, string);
 		cb = next;
 	}
+}
+
+// whitespace + SIZE_MAX + zero termination
+#define MEM_STR_LEN (1 + 21 + 1)
+static void get_free_memory_space(char *s)
+{
+#if defined(HAVE_MALLINFO2)
+	if (LOG_LEVEL_IS(LOG_LVL_DEBUG_MALLOC)) {
+		struct mallinfo2 info = mallinfo2();
+		snprintf(s, MEM_STR_LEN, " %zu", info.fordblks);
+		return;
+	}
+#elif defined(HAVE_MALLINFO)
+	if (LOG_LEVEL_IS(LOG_LVL_DEBUG_MALLOC)) {
+		struct mallinfo info = mallinfo();
+		snprintf(s, MEM_STR_LEN, " %d", info.fordblks);
+		return;
+	}
+#endif
+
+	// empty string
+	*s = 0;
 }
 
 /* The log_puts() serves two somewhat different goals:
@@ -100,22 +120,16 @@ static void log_puts(enum log_levels level,
 	if (f)
 		file = f + 1;
 
-	if (debug_level >= LOG_LVL_DEBUG) {
+	if (LOG_LEVEL_IS(LOG_LVL_DEBUG)) {
 		/* print with count and time information */
 		int64_t t = timeval_ms() - start;
-#ifdef _DEBUG_FREE_SPACE_
-		struct mallinfo info;
-		info = mallinfo();
-#endif
-		fprintf(log_output, "%s%d %" PRId64 " %s:%d %s()"
-#ifdef _DEBUG_FREE_SPACE_
-			" %d"
-#endif
-			": %s", log_strings[level + 1], count, t, file, line, function,
-#ifdef _DEBUG_FREE_SPACE_
-			info.fordblks,
-#endif
-			string);
+
+		char free_memory[MEM_STR_LEN];
+		get_free_memory_space(free_memory);
+
+		fprintf(log_output, "%s%u %" PRId64 " %s:%d %s()%s: %s",
+			log_strings[level + 1], count, t, file, line, function,
+			free_memory, string);
 	} else {
 		/* if we are using gdb through pipes then we do not want any output
 		 * to the pipe otherwise we get repeated strings */
@@ -132,7 +146,7 @@ static void log_puts(enum log_levels level,
 
 void log_printf(enum log_levels level,
 	const char *file,
-	unsigned line,
+	unsigned int line,
 	const char *function,
 	const char *format,
 	...)
@@ -140,9 +154,10 @@ void log_printf(enum log_levels level,
 	char *string;
 	va_list ap;
 
-	count++;
 	if (level > debug_level)
 		return;
+
+	count++;
 
 	va_start(ap, format);
 
@@ -155,15 +170,15 @@ void log_printf(enum log_levels level,
 	va_end(ap);
 }
 
-void log_vprintf_lf(enum log_levels level, const char *file, unsigned line,
+void log_vprintf_lf(enum log_levels level, const char *file, unsigned int line,
 		const char *function, const char *format, va_list args)
 {
 	char *tmp;
 
-	count++;
-
 	if (level > debug_level)
 		return;
+
+	count++;
 
 	tmp = alloc_vprintf(format, args);
 
@@ -181,7 +196,7 @@ void log_vprintf_lf(enum log_levels level, const char *file, unsigned line,
 
 void log_printf_lf(enum log_levels level,
 	const char *file,
-	unsigned line,
+	unsigned int line,
 	const char *function,
 	const char *format,
 	...)
@@ -195,49 +210,47 @@ void log_printf_lf(enum log_levels level,
 
 COMMAND_HANDLER(handle_debug_level_command)
 {
-	if (CMD_ARGC == 1) {
+	if (!CMD_ARGC) {
+		command_print(CMD, "%i", debug_level);
+	} else if (CMD_ARGC == 1) {
 		int new_level;
 		COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], new_level);
-		if ((new_level > LOG_LVL_DEBUG_IO) || (new_level < LOG_LVL_SILENT)) {
-			LOG_ERROR("level must be between %d and %d", LOG_LVL_SILENT, LOG_LVL_DEBUG_IO);
-			return ERROR_COMMAND_SYNTAX_ERROR;
+		if (new_level > LOG_LVL_DEBUG_USB || new_level < LOG_LVL_SILENT) {
+			command_print(CMD, "level must be between %d and %d", LOG_LVL_SILENT, LOG_LVL_DEBUG_USB);
+			return ERROR_COMMAND_ARGUMENT_INVALID;
 		}
 		debug_level = new_level;
-	} else if (CMD_ARGC > 1)
+	} else {
 		return ERROR_COMMAND_SYNTAX_ERROR;
-
-	command_print(CMD, "debug_level: %i", debug_level);
+	}
 
 	return ERROR_OK;
 }
 
 COMMAND_HANDLER(handle_log_output_command)
 {
-	if (CMD_ARGC == 0 || (CMD_ARGC == 1 && strcmp(CMD_ARGV[0], "default") == 0)) {
-		if (log_output != stderr && log_output) {
-			/* Close previous log file, if it was open and wasn't stderr. */
-			fclose(log_output);
-		}
-		log_output = stderr;
-		LOG_DEBUG("set log_output to default");
-		return ERROR_OK;
-	}
-	if (CMD_ARGC == 1) {
-		FILE *file = fopen(CMD_ARGV[0], "w");
+	if (CMD_ARGC > 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	FILE *file;
+	if (CMD_ARGC == 1 && strcmp(CMD_ARGV[0], "default") != 0) {
+		file = fopen(CMD_ARGV[0], "w");
 		if (!file) {
-			LOG_ERROR("failed to open output log '%s'", CMD_ARGV[0]);
+			command_print(CMD, "failed to open output log \"%s\"", CMD_ARGV[0]);
 			return ERROR_FAIL;
 		}
-		if (log_output != stderr && log_output) {
-			/* Close previous log file, if it was open and wasn't stderr. */
-			fclose(log_output);
-		}
-		log_output = file;
-		LOG_DEBUG("set log_output to \"%s\"", CMD_ARGV[0]);
-		return ERROR_OK;
+		command_print(CMD, "set log_output to \"%s\"", CMD_ARGV[0]);
+	} else {
+		file = stderr;
+		command_print(CMD, "set log_output to default");
 	}
 
-	return ERROR_COMMAND_SYNTAX_ERROR;
+	if (log_output != stderr && log_output) {
+		/* Close previous log file, if it was open and wasn't stderr. */
+		fclose(log_output);
+	}
+	log_output = file;
+	return ERROR_OK;
 }
 
 static const struct command_registration log_command_handlers[] = {
@@ -246,17 +259,17 @@ static const struct command_registration log_command_handlers[] = {
 		.handler = handle_log_output_command,
 		.mode = COMMAND_ANY,
 		.help = "redirect logging to a file (default: stderr)",
-		.usage = "[file_name | \"default\"]",
+		.usage = "[file_name | 'default']",
 	},
 	{
 		.name = "debug_level",
 		.handler = handle_debug_level_command,
 		.mode = COMMAND_ANY,
-		.help = "Sets the verbosity level of debugging output. "
+		.help = "Sets or display the verbosity level of debugging output. "
 			"0 shows errors only; 1 adds warnings; "
 			"2 (default) adds other info; 3 adds debugging; "
 			"4 adds extra verbose debugging.",
-		.usage = "number",
+		.usage = "[number]",
 	},
 	COMMAND_REGISTRATION_DONE
 };
@@ -274,10 +287,10 @@ void log_init(void)
 	if (debug_env) {
 		int value;
 		int retval = parse_int(debug_env, &value);
-		if (retval == ERROR_OK &&
-				debug_level >= LOG_LVL_SILENT &&
-				debug_level <= LOG_LVL_DEBUG_IO)
-				debug_level = value;
+		if (retval == ERROR_OK
+				&& debug_level >= LOG_LVL_SILENT
+				&& debug_level <= LOG_LVL_DEBUG_IO)
+			debug_level = value;
 	}
 
 	if (!log_output)
@@ -344,6 +357,8 @@ char *alloc_vprintf(const char *fmt, va_list ap)
 	int len;
 	char *string;
 
+	assert(fmt);
+
 	/* determine the length of the buffer needed */
 	va_copy(ap_copy, ap);
 	len = vsnprintf(NULL, 0, fmt, ap_copy);
@@ -352,7 +367,8 @@ char *alloc_vprintf(const char *fmt, va_list ap)
 	/* allocate and make room for terminating zero. */
 	/* FIXME: The old version always allocated at least one byte extra and
 	 * other code depend on that. They should be probably be fixed, but for
-	 * now reserve the extra byte. */
+	 * now reserve the extra byte. Apparently the last user of such hack is
+	 * log_vprintf_lf() that adds a trailing newline. */
 	string = malloc(len + 2);
 	if (!string)
 		return NULL;
@@ -399,9 +415,7 @@ char *alloc_printf(const char *format, ...)
 
 static void gdb_timeout_warning(int64_t delta_time)
 {
-	extern int gdb_actual_connections;
-
-	if (gdb_actual_connections)
+	if (gdb_get_actual_connections())
 		LOG_WARNING("keep_alive() was not invoked in the "
 			"%d ms timelimit. GDB alive packet not "
 			"sent! (%" PRId64 " ms). Workaround: increase "
@@ -509,7 +523,7 @@ void log_socket_error(const char *socket_desc)
  * Find the first non-printable character in the char buffer, return a pointer to it.
  * If no such character exists, return NULL.
  */
-char *find_nonprint_char(char *buf, unsigned buf_len)
+const char *find_nonprint_char(const char *buf, unsigned int buf_len)
 {
 	for (unsigned int i = 0; i < buf_len; i++) {
 		if (!isprint(buf[i]))

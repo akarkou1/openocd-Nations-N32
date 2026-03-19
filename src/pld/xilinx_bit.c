@@ -13,7 +13,6 @@
 #include "pld.h"
 #include <helper/log.h>
 
-#include <sys/stat.h>
 #include <helper/system.h>
 
 static int read_section(FILE *input_file, int length_size, char section,
@@ -60,26 +59,10 @@ static int read_section(FILE *input_file, int length_size, char section,
 int xilinx_read_bit_file(struct xilinx_bit_file *bit_file, const char *filename)
 {
 	FILE *input_file;
-	struct stat input_stat;
 	int read_count;
 
 	if (!filename || !bit_file)
 		return ERROR_COMMAND_SYNTAX_ERROR;
-
-	if (stat(filename, &input_stat) == -1) {
-		LOG_ERROR("couldn't stat() %s: %s", filename, strerror(errno));
-		return ERROR_PLD_FILE_LOAD_FAILED;
-	}
-
-	if (S_ISDIR(input_stat.st_mode)) {
-		LOG_ERROR("%s is a directory", filename);
-		return ERROR_PLD_FILE_LOAD_FAILED;
-	}
-
-	if (input_stat.st_size == 0) {
-		LOG_ERROR("Empty file %s", filename);
-		return ERROR_PLD_FILE_LOAD_FAILED;
-	}
 
 	input_file = fopen(filename, "rb");
 	if (!input_file) {
@@ -130,7 +113,7 @@ int xilinx_read_bit_file(struct xilinx_bit_file *bit_file, const char *filename)
 		return ERROR_PLD_FILE_LOAD_FAILED;
 	}
 
-	LOG_DEBUG("bit_file: %s %s %s,%s %" PRIu32 "", bit_file->source_file, bit_file->part_name,
+	LOG_DEBUG("bit_file: %s %s %s,%s %" PRIu32, bit_file->source_file, bit_file->part_name,
 		bit_file->date, bit_file->time, bit_file->length);
 
 	fclose(input_file);

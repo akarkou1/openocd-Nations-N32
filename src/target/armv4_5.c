@@ -168,9 +168,9 @@ static const struct {
 };
 
 /** Map PSR mode bits to the name of an ARM processor operating mode. */
-const char *arm_mode_name(unsigned psr_mode)
+const char *arm_mode_name(unsigned int psr_mode)
 {
-	for (unsigned i = 0; i < ARRAY_SIZE(arm_mode_data); i++) {
+	for (unsigned int i = 0; i < ARRAY_SIZE(arm_mode_data); i++) {
 		if (arm_mode_data[i].psr == psr_mode)
 			return arm_mode_data[i].name;
 	}
@@ -179,9 +179,9 @@ const char *arm_mode_name(unsigned psr_mode)
 }
 
 /** Return true iff the parameter denotes a valid ARM processor mode. */
-bool is_arm_mode(unsigned psr_mode)
+bool is_arm_mode(unsigned int psr_mode)
 {
-	for (unsigned i = 0; i < ARRAY_SIZE(arm_mode_data); i++) {
+	for (unsigned int i = 0; i < ARRAY_SIZE(arm_mode_data); i++) {
 		if (arm_mode_data[i].psr == psr_mode)
 			return true;
 	}
@@ -192,30 +192,30 @@ bool is_arm_mode(unsigned psr_mode)
 int arm_mode_to_number(enum arm_mode mode)
 {
 	switch (mode) {
-		case ARM_MODE_ANY:
-		/* map MODE_ANY to user mode */
-		case ARM_MODE_USR:
-			return 0;
-		case ARM_MODE_FIQ:
-			return 1;
-		case ARM_MODE_IRQ:
-			return 2;
-		case ARM_MODE_SVC:
-			return 3;
-		case ARM_MODE_ABT:
-			return 4;
-		case ARM_MODE_UND:
-			return 5;
-		case ARM_MODE_SYS:
-			return 6;
-		case ARM_MODE_MON:
-		case ARM_MODE_1176_MON:
-			return 7;
-		case ARM_MODE_HYP:
-			return 8;
-		default:
-			LOG_ERROR("invalid mode value encountered %d", mode);
-			return -1;
+	case ARM_MODE_ANY:
+	/* map MODE_ANY to user mode */
+	case ARM_MODE_USR:
+		return 0;
+	case ARM_MODE_FIQ:
+		return 1;
+	case ARM_MODE_IRQ:
+		return 2;
+	case ARM_MODE_SVC:
+		return 3;
+	case ARM_MODE_ABT:
+		return 4;
+	case ARM_MODE_UND:
+		return 5;
+	case ARM_MODE_SYS:
+		return 6;
+	case ARM_MODE_MON:
+	case ARM_MODE_1176_MON:
+		return 7;
+	case ARM_MODE_HYP:
+		return 8;
+	default:
+		LOG_ERROR("invalid mode value encountered %d", mode);
+		return -1;
 	}
 }
 
@@ -223,32 +223,36 @@ int arm_mode_to_number(enum arm_mode mode)
 enum arm_mode armv4_5_number_to_mode(int number)
 {
 	switch (number) {
-		case 0:
-			return ARM_MODE_USR;
-		case 1:
-			return ARM_MODE_FIQ;
-		case 2:
-			return ARM_MODE_IRQ;
-		case 3:
-			return ARM_MODE_SVC;
-		case 4:
-			return ARM_MODE_ABT;
-		case 5:
-			return ARM_MODE_UND;
-		case 6:
-			return ARM_MODE_SYS;
-		case 7:
-			return ARM_MODE_MON;
-		case 8:
-			return ARM_MODE_HYP;
-		default:
-			LOG_ERROR("mode index out of bounds %d", number);
-			return ARM_MODE_ANY;
+	case 0:
+		return ARM_MODE_USR;
+	case 1:
+		return ARM_MODE_FIQ;
+	case 2:
+		return ARM_MODE_IRQ;
+	case 3:
+		return ARM_MODE_SVC;
+	case 4:
+		return ARM_MODE_ABT;
+	case 5:
+		return ARM_MODE_UND;
+	case 6:
+		return ARM_MODE_SYS;
+	case 7:
+		return ARM_MODE_MON;
+	case 8:
+		return ARM_MODE_HYP;
+	default:
+		LOG_ERROR("mode index out of bounds %d", number);
+		return ARM_MODE_ANY;
 	}
 }
 
 static const char *arm_state_strings[] = {
-	"ARM", "Thumb", "Jazelle", "ThumbEE",
+	[ARM_STATE_ARM]      = "ARM",
+	[ARM_STATE_THUMB]    = "Thumb",
+	[ARM_STATE_JAZELLE]  = "Jazelle",
+	[ARM_STATE_THUMB_EE] = "ThumbEE",
+	[ARM_STATE_AARCH64]  = "AArch64",
 };
 
 /* Templates for ARM core registers.
@@ -272,8 +276,8 @@ static const struct {
 	 * CPSR -or- SPSR depending on whether 'mode' is MODE_ANY.
 	 * (Exception modes have both CPSR and SPSR registers ...)
 	 */
-	unsigned cookie;
-	unsigned gdb_index;
+	unsigned int cookie;
+	unsigned int gdb_index;
 	enum arm_mode mode;
 } arm_core_regs[] = {
 	/* IMPORTANT:  we guarantee that the first eight cached registers
@@ -351,6 +355,7 @@ static const struct {
 	/* These exist only when the Virtualization Extensions is present */
 	[42] = { .name = "sp_hyp", .cookie = 13, .mode = ARM_MODE_HYP, .gdb_index = 51, },
 	[43] = { .name = "spsr_hyp", .cookie = 16, .mode = ARM_MODE_HYP, .gdb_index = 52, },
+	// .gdb_index numbering continues by ARM_VFP_V3_D0
 };
 
 static const struct {
@@ -430,6 +435,16 @@ const int armv4_5_core_reg_map[9][17] = {
 	}
 };
 
+static const char *arm_core_state_string(struct arm *arm)
+{
+	if (arm->core_state > ARRAY_SIZE(arm_state_strings)) {
+		LOG_TARGET_ERROR(arm->target, "core_state exceeds table size");
+		return "Unknown";
+	}
+
+	return arm_state_strings[arm->core_state];
+}
+
 /**
  * Configures host-side ARM records to reflect the specified CPSR.
  * Later, code can use arm_reg_current() to map register numbers
@@ -469,22 +484,22 @@ void arm_set_cpsr(struct arm *arm, uint32_t cpsr)
 
 	if (cpsr & (1 << 5)) {	/* T */
 		if (cpsr & (1 << 24)) {	/* J */
-			LOG_WARNING("ThumbEE -- incomplete support");
+			LOG_TARGET_WARNING(arm->target, "ThumbEE -- incomplete support");
 			state = ARM_STATE_THUMB_EE;
 		} else
 			state = ARM_STATE_THUMB;
 	} else {
 		if (cpsr & (1 << 24)) {	/* J */
-			LOG_ERROR("Jazelle state handling is BROKEN!");
+			LOG_TARGET_ERROR(arm->target, "Jazelle state handling is broken");
 			state = ARM_STATE_JAZELLE;
 		} else
 			state = ARM_STATE_ARM;
 	}
 	arm->core_state = state;
 
-	LOG_DEBUG("set CPSR %#8.8x: %s mode, %s state", (unsigned) cpsr,
+	LOG_TARGET_DEBUG(arm->target, "set CPSR %#8.8" PRIx32 ": %s mode, %s state", cpsr,
 		arm_mode_name(mode),
-		arm_state_strings[arm->core_state]);
+		arm_core_state_string(arm));
 }
 
 /**
@@ -499,7 +514,7 @@ void arm_set_cpsr(struct arm *arm, uint32_t cpsr)
  *	However, R8..R14, and SPSR (arm->spsr) *must* be mapped.
  *	CPSR (arm->cpsr) is also not mapped.
  */
-struct reg *arm_reg_current(struct arm *arm, unsigned regnum)
+struct reg *arm_reg_current(struct arm *arm, unsigned int regnum)
 {
 	struct reg *r;
 
@@ -507,7 +522,7 @@ struct reg *arm_reg_current(struct arm *arm, unsigned regnum)
 		return NULL;
 
 	if (!arm->map) {
-		LOG_ERROR("Register map is not available yet, the target is not fully initialised");
+		LOG_TARGET_ERROR(arm->target, "Register map is not available yet, the target is not fully initialised");
 		r = arm->core_cache->reg_list + regnum;
 	} else
 		r = arm->core_cache->reg_list + arm->map[regnum];
@@ -516,7 +531,7 @@ struct reg *arm_reg_current(struct arm *arm, unsigned regnum)
 	 * that doesn't support it...
 	 */
 	if (!r) {
-		LOG_ERROR("Invalid CPSR mode");
+		LOG_TARGET_ERROR(arm->target, "Invalid CPSR mode");
 		r = arm->core_cache->reg_list + regnum;
 	}
 
@@ -578,7 +593,7 @@ static int armv4_5_get_core_reg(struct reg *reg)
 	struct target *target = reg_arch_info->target;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("Target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -600,7 +615,7 @@ static int armv4_5_set_core_reg(struct reg *reg, uint8_t *buf)
 	uint32_t value = buf_get_u32(buf, 0, 32);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_ERROR("Target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -617,7 +632,7 @@ static int armv4_5_set_core_reg(struct reg *reg, uint8_t *buf)
 		 */
 		if (armv4_5_target->core_mode !=
 			(enum arm_mode)(value & 0x1f)) {
-			LOG_DEBUG("changing ARM core mode to '%s'",
+			LOG_TARGET_DEBUG(target, "changing ARM core mode to '%s'",
 				arm_mode_name(value & 0x1f));
 			value &= ~((1 << 24) | (1 << 5));
 			uint8_t t[4];
@@ -645,15 +660,14 @@ static const struct reg_arch_type arm_reg_type = {
 
 struct reg_cache *arm_build_reg_cache(struct target *target, struct arm *arm)
 {
-	int num_regs = ARRAY_SIZE(arm_core_regs);
-	int num_core_regs = num_regs;
+	unsigned int num_regs = ARRAY_SIZE(arm_core_regs);
+	unsigned int num_core_regs = num_regs;
 	if (arm->arm_vfp_version == ARM_VFP_V3)
 		num_regs += ARRAY_SIZE(arm_vfp_v3_regs);
 
 	struct reg_cache *cache = malloc(sizeof(struct reg_cache));
 	struct reg *reg_list = calloc(num_regs, sizeof(struct reg));
 	struct arm_reg *reg_arch_info = calloc(num_regs, sizeof(struct arm_reg));
-	int i;
 
 	if (!cache || !reg_list || !reg_arch_info) {
 		free(cache);
@@ -667,7 +681,7 @@ struct reg_cache *arm_build_reg_cache(struct target *target, struct arm *arm)
 	cache->reg_list = reg_list;
 	cache->num_regs = 0;
 
-	for (i = 0; i < num_core_regs; i++) {
+	for (unsigned int i = 0; i < num_core_regs; i++) {
 		/* Skip registers this core doesn't expose */
 		if (arm_core_regs[i].mode == ARM_MODE_MON
 			&& arm->core_type != ARM_CORE_TYPE_SEC_EXT
@@ -676,8 +690,6 @@ struct reg_cache *arm_build_reg_cache(struct target *target, struct arm *arm)
 		if (arm_core_regs[i].mode == ARM_MODE_HYP
 			&& arm->core_type != ARM_CORE_TYPE_VIRT_EXT)
 			continue;
-
-		/* REVISIT handle Cortex-M, which only shadows R13/SP */
 
 		reg_arch_info[i].num = arm_core_regs[i].cookie;
 		reg_arch_info[i].mode = arm_core_regs[i].mode;
@@ -691,9 +703,6 @@ struct reg_cache *arm_build_reg_cache(struct target *target, struct arm *arm)
 		reg_list[i].type = &arm_reg_type;
 		reg_list[i].arch_info = &reg_arch_info[i];
 		reg_list[i].exist = true;
-
-		/* This really depends on the calling convention in use */
-		reg_list[i].caller_save = false;
 
 		/* Registers data type, as used by GDB target description */
 		reg_list[i].reg_data_type = malloc(sizeof(struct reg_data_type));
@@ -715,16 +724,22 @@ struct reg_cache *arm_build_reg_cache(struct target *target, struct arm *arm)
 		if (reg_list[i].number <= 15 || reg_list[i].number == 25) {
 			reg_list[i].feature->name = "org.gnu.gdb.arm.core";
 			reg_list[i].group = "general";
+			/* Registers which should be preserved across GDB inferior function calls.
+			 * Avoid saving banked registers as GDB (version 16.2 in time of writing)
+			 * does not take the current mode into account and messes the value
+			 * by restoring both the not banked register and the banked alias of it
+			 * in the current mode. */
+			reg_list[i].caller_save = true;
 		} else {
 			reg_list[i].feature->name = "net.sourceforge.openocd.banked";
 			reg_list[i].group = "banked";
+			reg_list[i].caller_save = false;
 		}
 
 		cache->num_regs++;
 	}
 
-	int j;
-	for (i = num_core_regs, j = 0; i < num_regs; i++, j++) {
+	for (unsigned int i = num_core_regs, j = 0; i < num_regs; i++, j++) {
 		reg_arch_info[i].num = arm_vfp_v3_regs[j].id;
 		reg_arch_info[i].mode = arm_vfp_v3_regs[j].mode;
 		reg_arch_info[i].target = target;
@@ -738,7 +753,8 @@ struct reg_cache *arm_build_reg_cache(struct target *target, struct arm *arm)
 		reg_list[i].arch_info = &reg_arch_info[i];
 		reg_list[i].exist = true;
 
-		reg_list[i].caller_save = false;
+		/* Mark d0 - d31 and fpscr as save-restore for GDB */
+		reg_list[i].caller_save = true;
 
 		reg_list[i].reg_data_type = malloc(sizeof(struct reg_data_type));
 		reg_list[i].reg_data_type->type = arm_vfp_v3_regs[j].type;
@@ -784,7 +800,7 @@ int arm_arch_state(struct target *target)
 	struct arm *arm = target_to_arm(target);
 
 	if (arm->common_magic != ARM_COMMON_MAGIC) {
-		LOG_ERROR("BUG: called for a non-ARM target");
+		LOG_TARGET_ERROR(target, "BUG: called for a non-ARM target");
 		return ERROR_FAIL;
 	}
 
@@ -792,9 +808,9 @@ int arm_arch_state(struct target *target)
 	if (target->semihosting && target->semihosting->hit_fileio)
 		return ERROR_OK;
 
-	LOG_USER("target halted in %s state due to %s, current mode: %s\n"
+	LOG_TARGET_USER(target, "target halted in %s state due to %s, current mode: %s\n"
 		"cpsr: 0x%8.8" PRIx32 " pc: 0x%8.8" PRIx32 "%s%s",
-		arm_state_strings[arm->core_state],
+		arm_core_state_string(arm),
 		debug_reason_name(target),
 		arm_mode_name(arm->core_mode),
 		buf_get_u32(arm->cpsr->value, 0, 32),
@@ -817,8 +833,8 @@ COMMAND_HANDLER(handle_armv4_5_reg_command)
 	}
 
 	if (target->state != TARGET_HALTED) {
-		command_print(CMD, "error: target must be halted for register accesses");
-		return ERROR_FAIL;
+		command_print(CMD, "Error: target must be halted for register accesses");
+		return ERROR_TARGET_NOT_HALTED;
 	}
 
 	if (arm->core_type != ARM_CORE_TYPE_STD) {
@@ -828,19 +844,19 @@ COMMAND_HANDLER(handle_armv4_5_reg_command)
 	}
 
 	if (!is_arm_mode(arm->core_mode)) {
-		LOG_ERROR("not a valid arm core mode - communication failure?");
+		command_print(CMD, "not a valid arm core mode - communication failure?");
 		return ERROR_FAIL;
 	}
 
 	if (!arm->full_context) {
-		command_print(CMD, "error: target doesn't support %s",
+		command_print(CMD, "Error: target doesn't support %s",
 			CMD_NAME);
 		return ERROR_FAIL;
 	}
 
 	regs = arm->core_cache->reg_list;
 
-	for (unsigned mode = 0; mode < ARRAY_SIZE(arm_mode_data); mode++) {
+	for (unsigned int mode = 0; mode < ARRAY_SIZE(arm_mode_data); mode++) {
 		const char *name;
 		char *sep = "\n";
 		char *shadow = "";
@@ -850,36 +866,36 @@ COMMAND_HANDLER(handle_armv4_5_reg_command)
 
 		/* label this bank of registers (or shadows) */
 		switch (arm_mode_data[mode].psr) {
-			case ARM_MODE_SYS:
+		case ARM_MODE_SYS:
+			continue;
+		case ARM_MODE_USR:
+			name = "System and User";
+			sep = "";
+			break;
+		case ARM_MODE_HYP:
+			if (arm->core_type != ARM_CORE_TYPE_VIRT_EXT)
 				continue;
-			case ARM_MODE_USR:
-				name = "System and User";
-				sep = "";
-				break;
-			case ARM_MODE_HYP:
-				if (arm->core_type != ARM_CORE_TYPE_VIRT_EXT)
-					continue;
-			/* FALLTHROUGH */
-			case ARM_MODE_MON:
-			case ARM_MODE_1176_MON:
-				if (arm->core_type != ARM_CORE_TYPE_SEC_EXT
-					&& arm->core_type != ARM_CORE_TYPE_VIRT_EXT)
-					continue;
-			/* FALLTHROUGH */
-			default:
-				name = arm_mode_data[mode].name;
-				shadow = "shadow ";
-				break;
+		/* FALLTHROUGH */
+		case ARM_MODE_MON:
+		case ARM_MODE_1176_MON:
+			if (arm->core_type != ARM_CORE_TYPE_SEC_EXT
+				&& arm->core_type != ARM_CORE_TYPE_VIRT_EXT)
+				continue;
+		/* FALLTHROUGH */
+		default:
+			name = arm_mode_data[mode].name;
+			shadow = "shadow ";
+			break;
 		}
 		command_print(CMD, "%s%s mode %sregisters",
 			sep, name, shadow);
 
 		/* display N rows of up to 4 registers each */
-		for (unsigned i = 0; i < arm_mode_data[mode].n_indices; ) {
+		for (unsigned int i = 0; i < arm_mode_data[mode].n_indices; ) {
 			char output[80];
 			int output_len = 0;
 
-			for (unsigned j = 0; j < 4; j++, i++) {
+			for (unsigned int j = 0; j < 4; j++, i++) {
 				uint32_t value;
 				struct reg *reg = regs;
 
@@ -929,7 +945,7 @@ COMMAND_HANDLER(handle_arm_core_state_command)
 			arm->core_state = ARM_STATE_THUMB;
 	}
 
-	command_print(CMD, "core state: %s", arm_state_strings[arm->core_state]);
+	command_print(CMD, "core state: %s", arm_core_state_string(arm));
 
 	return ret;
 }
@@ -940,7 +956,7 @@ COMMAND_HANDLER(handle_arm_disassemble_command)
 	struct target *target = get_current_target(CMD_CTX);
 
 	if (!target) {
-		LOG_ERROR("No target selected");
+		command_print(CMD, "No target selected");
 		return ERROR_FAIL;
 	}
 
@@ -960,26 +976,26 @@ COMMAND_HANDLER(handle_arm_disassemble_command)
 	}
 
 	switch (CMD_ARGC) {
-		case 3:
-			if (strcmp(CMD_ARGV[2], "thumb") != 0)
-				return ERROR_COMMAND_SYNTAX_ERROR;
-			thumb = true;
-		/* FALL THROUGH */
-		case 2:
-			COMMAND_PARSE_NUMBER(uint, CMD_ARGV[1], count);
-		/* FALL THROUGH */
-		case 1:
-			COMMAND_PARSE_ADDRESS(CMD_ARGV[0], address);
-			if (address & 0x01) {
-				if (!thumb) {
-					command_print(CMD, "Disassemble as Thumb");
-					thumb = true;
-				}
-				address &= ~1;
-			}
-			break;
-		default:
+	case 3:
+		if (strcmp(CMD_ARGV[2], "thumb") != 0)
 			return ERROR_COMMAND_SYNTAX_ERROR;
+		thumb = true;
+	/* FALL THROUGH */
+	case 2:
+		COMMAND_PARSE_NUMBER(uint, CMD_ARGV[1], count);
+	/* FALL THROUGH */
+	case 1:
+		COMMAND_PARSE_ADDRESS(CMD_ARGV[0], address);
+		if (address & 0x01) {
+			if (!thumb) {
+				command_print(CMD, "Disassemble as Thumb");
+				thumb = true;
+			}
+			address &= ~1;
+		}
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	return arm_disassemble(CMD, target, address, count, thumb);
@@ -1018,8 +1034,10 @@ COMMAND_HANDLER(handle_armv4_5_mcrmrc)
 		return ERROR_FAIL;
 	}
 
-	if (target->state != TARGET_HALTED)
+	if (target->state != TARGET_HALTED) {
+		command_print(CMD, "Error: [%s] not halted", target_name(target));
 		return ERROR_TARGET_NOT_HALTED;
+	}
 
 	int cpnum;
 	uint32_t op1;
@@ -1091,6 +1109,94 @@ COMMAND_HANDLER(handle_armv4_5_mcrmrc)
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(handle_armv4_5_mcrrmrrc)
+{
+	bool is_mcrr = false;
+	unsigned int arg_cnt = 3;
+
+	if (!strcmp(CMD_NAME, "mcrr")) {
+		is_mcrr = true;
+		arg_cnt = 4;
+	}
+
+	if (arg_cnt != CMD_ARGC)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct target *target = get_current_target(CMD_CTX);
+	if (!target) {
+		command_print(CMD, "no current target");
+		return ERROR_FAIL;
+	}
+	if (!target_was_examined(target)) {
+		command_print(CMD, "%s: not yet examined", target_name(target));
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
+	struct arm *arm = target_to_arm(target);
+	if (!is_arm(arm)) {
+		command_print(CMD, "%s: not an ARM", target_name(target));
+		return ERROR_FAIL;
+	}
+
+	if (target->state != TARGET_HALTED)
+		return ERROR_TARGET_NOT_HALTED;
+
+	int cpnum;
+	uint32_t op1;
+	uint32_t crm;
+	uint64_t value;
+
+	/* NOTE:  parameter sequence matches ARM instruction set usage:
+	 *	MCRR	pNUM, op1, rX1, rX2, CRm	; write CP from rX1 and rX2
+	 *	MREC	pNUM, op1, rX1, rX2, CRm	; read CP into rX1 and rX2
+	 * The "rXn" are necessarily omitted; they use Tcl mechanisms.
+	 */
+	COMMAND_PARSE_NUMBER(int, CMD_ARGV[0], cpnum);
+	if (cpnum & ~0xf) {
+		command_print(CMD, "coprocessor %d out of range", cpnum);
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+	}
+
+	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], op1);
+	if (op1 & ~0xf) {
+		command_print(CMD, "op1 %d out of range", op1);
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+	}
+
+	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], crm);
+	if (crm & ~0xf) {
+		command_print(CMD, "CRm %d out of range", crm);
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+	}
+
+	/*
+	 * FIXME change the call syntax here ... simplest to just pass
+	 * the MRC() or MCR() instruction to be executed.  That will also
+	 * let us support the "mrrc2" and "mcrr2" opcodes (toggling one bit)
+	 * if that's ever needed.
+	 */
+	if (is_mcrr) {
+		COMMAND_PARSE_NUMBER(u64, CMD_ARGV[3], value);
+
+		/* NOTE: parameters reordered! */
+		/* ARMV5_T_MCRR(cpnum, op1, crm) */
+		int retval = arm->mcrr(target, cpnum, op1, crm, value);
+		if (retval != ERROR_OK)
+			return retval;
+	} else {
+		value = 0;
+		/* NOTE: parameters reordered! */
+		/* ARMV5_T_MRRC(cpnum, op1, crm) */
+		int retval = arm->mrrc(target, cpnum, op1, crm, &value);
+		if (retval != ERROR_OK)
+			return retval;
+
+		command_print(CMD, "0x%" PRIx64, value);
+	}
+
+	return ERROR_OK;
+}
+
 static const struct command_registration arm_exec_command_handlers[] = {
 	{
 		.name = "reg",
@@ -1112,6 +1218,20 @@ static const struct command_registration arm_exec_command_handlers[] = {
 		.handler = handle_armv4_5_mcrmrc,
 		.help = "read coprocessor register",
 		.usage = "cpnum op1 CRn CRm op2",
+	},
+	{
+		.name = "mcrr",
+		.mode = COMMAND_EXEC,
+		.handler = handle_armv4_5_mcrrmrrc,
+		.help = "write coprocessor 64-bit register",
+		.usage = "cpnum op1 CRm value",
+	},
+	{
+		.name = "mrrc",
+		.mode = COMMAND_EXEC,
+		.handler = handle_armv4_5_mcrrmrrc,
+		.help = "read coprocessor 64-bit register",
+		.usage = "cpnum op1 CRm",
 	},
 	{
 		.chain = arm_all_profiles_command_handlers,
@@ -1160,7 +1280,7 @@ const struct command_registration arm_command_handlers[] = {
  * same way as a gdb for arm. This can be changed later on. User can still
  * set the specific architecture variant with the gdb command.
  */
-const char *arm_get_gdb_arch(struct target *target)
+const char *arm_get_gdb_arch(const struct target *target)
 {
 	return "arm";
 }
@@ -1173,7 +1293,7 @@ int arm_get_gdb_reg_list(struct target *target,
 	unsigned int i;
 
 	if (!is_arm_mode(arm->core_mode)) {
-		LOG_ERROR("not a valid arm core mode - communication failure?");
+		LOG_TARGET_ERROR(target, "not a valid arm core mode - communication failure?");
 		return ERROR_FAIL;
 	}
 
@@ -1183,11 +1303,11 @@ int arm_get_gdb_reg_list(struct target *target,
 		*reg_list = malloc(sizeof(struct reg *) * (*reg_list_size));
 
 		for (i = 0; i < 16; i++)
-				(*reg_list)[i] = arm_reg_current(arm, i);
+			(*reg_list)[i] = arm_reg_current(arm, i);
 
 		/* For GDB compatibility, take FPA registers size into account and zero-fill it*/
 		for (i = 16; i < 24; i++)
-				(*reg_list)[i] = &arm_gdb_dummy_fp_reg;
+			(*reg_list)[i] = &arm_gdb_dummy_fp_reg;
 		(*reg_list)[24] = &arm_gdb_dummy_fps_reg;
 
 		(*reg_list)[25] = arm->cpsr;
@@ -1196,14 +1316,14 @@ int arm_get_gdb_reg_list(struct target *target,
 
 	case REG_CLASS_ALL:
 		switch (arm->core_type) {
-			case ARM_CORE_TYPE_SEC_EXT:
-				*reg_list_size = 51;
-				break;
-			case ARM_CORE_TYPE_VIRT_EXT:
-				*reg_list_size = 53;
-				break;
-			default:
-				*reg_list_size = 48;
+		case ARM_CORE_TYPE_SEC_EXT:
+			*reg_list_size = 51;
+			break;
+		case ARM_CORE_TYPE_VIRT_EXT:
+			*reg_list_size = 53;
+			break;
+		default:
+			*reg_list_size = 48;
 		}
 		unsigned int list_size_core = *reg_list_size;
 		if (arm->arm_vfp_version == ARM_VFP_V3)
@@ -1212,25 +1332,25 @@ int arm_get_gdb_reg_list(struct target *target,
 		*reg_list = malloc(sizeof(struct reg *) * (*reg_list_size));
 
 		for (i = 0; i < 16; i++)
-				(*reg_list)[i] = arm_reg_current(arm, i);
+			(*reg_list)[i] = arm_reg_current(arm, i);
 
 		for (i = 13; i < ARRAY_SIZE(arm_core_regs); i++) {
-				int reg_index = arm->core_cache->reg_list[i].number;
+			int reg_index = arm->core_cache->reg_list[i].number;
 
-				if (arm_core_regs[i].mode == ARM_MODE_MON
+			if (arm_core_regs[i].mode == ARM_MODE_MON
 					&& arm->core_type != ARM_CORE_TYPE_SEC_EXT
 					&& arm->core_type != ARM_CORE_TYPE_VIRT_EXT)
-					continue;
-				if (arm_core_regs[i].mode == ARM_MODE_HYP
+				continue;
+			if (arm_core_regs[i].mode == ARM_MODE_HYP
 					&& arm->core_type != ARM_CORE_TYPE_VIRT_EXT)
-					continue;
-				(*reg_list)[reg_index] = &(arm->core_cache->reg_list[i]);
+				continue;
+			(*reg_list)[reg_index] = &arm->core_cache->reg_list[i];
 		}
 
 		/* When we supply the target description, there is no need for fake FPA */
 		for (i = 16; i < 24; i++) {
-				(*reg_list)[i] = &arm_gdb_dummy_fp_reg;
-				(*reg_list)[i]->size = 0;
+			(*reg_list)[i] = &arm_gdb_dummy_fp_reg;
+			(*reg_list)[i]->size = 0;
 		}
 		(*reg_list)[24] = &arm_gdb_dummy_fps_reg;
 		(*reg_list)[24]->size = 0;
@@ -1244,7 +1364,7 @@ int arm_get_gdb_reg_list(struct target *target,
 		return ERROR_OK;
 
 	default:
-		LOG_ERROR("not a valid register class type in query.");
+		LOG_TARGET_ERROR(target, "not a valid register class type in query");
 		return ERROR_FAIL;
 	}
 }
@@ -1252,7 +1372,7 @@ int arm_get_gdb_reg_list(struct target *target,
 /* wait for execution to complete and check exit point */
 static int armv4_5_run_algorithm_completion(struct target *target,
 	uint32_t exit_point,
-	int timeout_ms,
+	unsigned int timeout_ms,
 	void *arch_info)
 {
 	int retval;
@@ -1273,8 +1393,7 @@ static int armv4_5_run_algorithm_completion(struct target *target,
 
 	/* fast exit: ARMv5+ code can use BKPT */
 	if (exit_point && buf_get_u32(arm->pc->value, 0, 32) != exit_point) {
-		LOG_WARNING(
-			"target reentered debug state, but not at the desired exit point: 0x%4.4" PRIx32 "",
+		LOG_TARGET_ERROR(target, "reentered debug state, but not at the desired exit point: 0x%4.4" PRIx32,
 			buf_get_u32(arm->pc->value, 0, 32));
 		return ERROR_TARGET_TIMEOUT;
 	}
@@ -1286,9 +1405,9 @@ int armv4_5_run_algorithm_inner(struct target *target,
 	int num_mem_params, struct mem_param *mem_params,
 	int num_reg_params, struct reg_param *reg_params,
 	uint32_t entry_point, uint32_t exit_point,
-	int timeout_ms, void *arch_info,
+	unsigned int timeout_ms, void *arch_info,
 	int (*run_it)(struct target *target, uint32_t exit_point,
-	int timeout_ms, void *arch_info))
+	unsigned int timeout_ms, void *arch_info))
 {
 	struct arm *arm = target_to_arm(target);
 	struct arm_algorithm *arm_algorithm_info = arch_info;
@@ -1296,36 +1415,35 @@ int armv4_5_run_algorithm_inner(struct target *target,
 	uint32_t context[17];
 	uint32_t cpsr;
 	int exit_breakpoint_size = 0;
-	int i;
 	int retval = ERROR_OK;
 
-	LOG_DEBUG("Running algorithm");
+	LOG_TARGET_DEBUG(target, "Running algorithm");
 
 	if (arm_algorithm_info->common_magic != ARM_COMMON_MAGIC) {
-		LOG_ERROR("current target isn't an ARMV4/5 target");
+		LOG_TARGET_ERROR(target, "current target isn't an ARMV4/5 target");
 		return ERROR_TARGET_INVALID;
 	}
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted (run target algo)");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
 	if (!is_arm_mode(arm->core_mode)) {
-		LOG_ERROR("not a valid arm core mode - communication failure?");
+		LOG_TARGET_ERROR(target, "not a valid arm core mode - communication failure?");
 		return ERROR_FAIL;
 	}
 
 	/* armv5 and later can terminate with BKPT instruction; less overhead */
 	if (!exit_point && arm->arch == ARM_ARCH_V4) {
-		LOG_ERROR("ARMv4 target needs HW breakpoint location");
+		LOG_TARGET_ERROR(target, "ARMv4 target needs HW breakpoint location");
 		return ERROR_FAIL;
 	}
 
 	/* save r0..pc, cpsr-or-spsr, and then cpsr-for-sure;
 	 * they'll be restored later.
 	 */
-	for (i = 0; i <= 16; i++) {
+	for (unsigned int i = 0; i < ARRAY_SIZE(context); i++) {
 		struct reg *r;
 
 		r = &ARMV4_5_CORE_REG_MODE(arm->core_cache,
@@ -1337,7 +1455,7 @@ int armv4_5_run_algorithm_inner(struct target *target,
 	}
 	cpsr = buf_get_u32(arm->cpsr->value, 0, 32);
 
-	for (i = 0; i < num_mem_params; i++) {
+	for (int i = 0; i < num_mem_params; i++) {
 		if (mem_params[i].direction == PARAM_IN)
 			continue;
 		retval = target_write_buffer(target, mem_params[i].address, mem_params[i].size,
@@ -1346,18 +1464,18 @@ int armv4_5_run_algorithm_inner(struct target *target,
 			return retval;
 	}
 
-	for (i = 0; i < num_reg_params; i++) {
+	for (int i = 0; i < num_reg_params; i++) {
 		if (reg_params[i].direction == PARAM_IN)
 			continue;
 
 		struct reg *reg = register_get_by_name(arm->core_cache, reg_params[i].reg_name, false);
 		if (!reg) {
-			LOG_ERROR("BUG: register '%s' not found", reg_params[i].reg_name);
+			LOG_TARGET_ERROR(target, "BUG: register '%s' not found", reg_params[i].reg_name);
 			return ERROR_COMMAND_SYNTAX_ERROR;
 		}
 
 		if (reg->size != reg_params[i].size) {
-			LOG_ERROR("BUG: register '%s' size doesn't match reg_params[i].size",
+			LOG_TARGET_ERROR(target, "BUG: register '%s' size doesn't match reg_params[i].size",
 				reg_params[i].reg_name);
 			return ERROR_COMMAND_SYNTAX_ERROR;
 		}
@@ -1373,12 +1491,12 @@ int armv4_5_run_algorithm_inner(struct target *target,
 	else if (arm->core_state == ARM_STATE_THUMB)
 		exit_breakpoint_size = 2;
 	else {
-		LOG_ERROR("BUG: can't execute algorithms when not in ARM or Thumb state");
+		LOG_TARGET_ERROR(target, "BUG: can't execute algorithms when not in ARM or Thumb state");
 		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	if (arm_algorithm_info->core_mode != ARM_MODE_ANY) {
-		LOG_DEBUG("setting core_mode: 0x%2.2x",
+		LOG_TARGET_DEBUG(target, "setting core_mode: 0x%2.2x",
 			arm_algorithm_info->core_mode);
 		buf_set_u32(arm->cpsr->value, 0, 5,
 			arm_algorithm_info->core_mode);
@@ -1391,12 +1509,12 @@ int armv4_5_run_algorithm_inner(struct target *target,
 		retval = breakpoint_add(target, exit_point,
 				exit_breakpoint_size, BKPT_HARD);
 		if (retval != ERROR_OK) {
-			LOG_ERROR("can't add HW breakpoint to terminate algorithm");
+			LOG_TARGET_ERROR(target, "can't add HW breakpoint to terminate algorithm");
 			return ERROR_TARGET_FAILURE;
 		}
 	}
 
-	retval = target_resume(target, 0, entry_point, 1, 1);
+	retval = target_resume(target, false, entry_point, true, true);
 	if (retval != ERROR_OK)
 		return retval;
 	retval = run_it(target, exit_point, timeout_ms, arch_info);
@@ -1407,7 +1525,7 @@ int armv4_5_run_algorithm_inner(struct target *target,
 	if (retval != ERROR_OK)
 		return retval;
 
-	for (i = 0; i < num_mem_params; i++) {
+	for (int i = 0; i < num_mem_params; i++) {
 		if (mem_params[i].direction != PARAM_OUT) {
 			int retvaltemp = target_read_buffer(target, mem_params[i].address,
 					mem_params[i].size,
@@ -1417,20 +1535,20 @@ int armv4_5_run_algorithm_inner(struct target *target,
 		}
 	}
 
-	for (i = 0; i < num_reg_params; i++) {
+	for (int i = 0; i < num_reg_params; i++) {
 		if (reg_params[i].direction != PARAM_OUT) {
 
 			struct reg *reg = register_get_by_name(arm->core_cache,
 					reg_params[i].reg_name,
 					false);
 			if (!reg) {
-				LOG_ERROR("BUG: register '%s' not found", reg_params[i].reg_name);
+				LOG_TARGET_ERROR(target, "BUG: register '%s' not found", reg_params[i].reg_name);
 				retval = ERROR_COMMAND_SYNTAX_ERROR;
 				continue;
 			}
 
 			if (reg->size != reg_params[i].size) {
-				LOG_ERROR(
+				LOG_TARGET_ERROR(target,
 					"BUG: register '%s' size doesn't match reg_params[i].size",
 					reg_params[i].reg_name);
 				retval = ERROR_COMMAND_SYNTAX_ERROR;
@@ -1442,12 +1560,12 @@ int armv4_5_run_algorithm_inner(struct target *target,
 	}
 
 	/* restore everything we saved before (17 or 18 registers) */
-	for (i = 0; i <= 16; i++) {
+	for (unsigned int i = 0; i < ARRAY_SIZE(context); i++) {
 		uint32_t regvalue;
 		regvalue = buf_get_u32(ARMV4_5_CORE_REG_MODE(arm->core_cache,
 				arm_algorithm_info->core_mode, i).value, 0, 32);
 		if (regvalue != context[i]) {
-			LOG_DEBUG("restoring register %s with value 0x%8.8" PRIx32 "",
+			LOG_DEBUG("restoring register %s with value 0x%8.8" PRIx32,
 				ARMV4_5_CORE_REG_MODE(arm->core_cache,
 				arm_algorithm_info->core_mode, i).name, context[i]);
 			buf_set_u32(ARMV4_5_CORE_REG_MODE(arm->core_cache,
@@ -1474,7 +1592,7 @@ int armv4_5_run_algorithm(struct target *target,
 	struct reg_param *reg_params,
 	target_addr_t entry_point,
 	target_addr_t exit_point,
-	int timeout_ms,
+	unsigned int timeout_ms,
 	void *arch_info)
 {
 	return armv4_5_run_algorithm_inner(target,
@@ -1520,8 +1638,10 @@ int arm_checksum_memory(struct target *target,
 		retval = target_write_u32(target,
 				crc_algorithm->address + i * sizeof(uint32_t),
 				le_to_h_u32(&arm_crc_code_le[i * 4]));
-		if (retval != ERROR_OK)
-			goto cleanup;
+		if (retval != ERROR_OK) {
+			target_free_working_area(target, crc_algorithm);
+			return retval;
+		}
 	}
 
 	arm_algo.common_magic = ARM_COMMON_MAGIC;
@@ -1535,7 +1655,7 @@ int arm_checksum_memory(struct target *target,
 	buf_set_u32(reg_params[1].value, 0, 32, count);
 
 	/* 20 second timeout/megabyte */
-	int timeout = 20000 * (1 + (count / (1024 * 1024)));
+	unsigned int timeout = 20000 * (1 + (count / (1024 * 1024)));
 
 	/* armv4 must exit using a hardware breakpoint */
 	if (arm->arch == ARM_ARCH_V4)
@@ -1549,12 +1669,11 @@ int arm_checksum_memory(struct target *target,
 	if (retval == ERROR_OK)
 		*checksum = buf_get_u32(reg_params[0].value, 0, 32);
 	else
-		LOG_ERROR("error executing ARM crc algorithm");
+		LOG_TARGET_ERROR(target, "error executing ARM CRC algorithm");
 
 	destroy_reg_param(&reg_params[0]);
 	destroy_reg_param(&reg_params[1]);
 
-cleanup:
 	target_free_working_area(target, crc_algorithm);
 
 	return retval;
@@ -1567,7 +1686,8 @@ cleanup:
  *
  */
 int arm_blank_check_memory(struct target *target,
-	struct target_memory_check_block *blocks, int num_blocks, uint8_t erased_value)
+	struct target_memory_check_block *blocks, unsigned int num_blocks,
+	uint8_t erased_value, unsigned int *checked)
 {
 	struct working_area *check_algorithm;
 	struct reg_param reg_params[3];
@@ -1584,7 +1704,7 @@ int arm_blank_check_memory(struct target *target,
 	assert(sizeof(check_code_le) % 4 == 0);
 
 	if (erased_value != 0xff) {
-		LOG_ERROR("Erase value 0x%02" PRIx8 " not yet supported for ARMv4/v5 targets",
+		LOG_TARGET_ERROR(target, "Erase value 0x%02" PRIx8 " not yet supported for ARMv4/v5 targets",
 			erased_value);
 		return ERROR_FAIL;
 	}
@@ -1601,8 +1721,10 @@ int arm_blank_check_memory(struct target *target,
 				check_algorithm->address
 				+ i * sizeof(uint32_t),
 				le_to_h_u32(&check_code_le[i * 4]));
-		if (retval != ERROR_OK)
-			goto cleanup;
+		if (retval != ERROR_OK) {
+			target_free_working_area(target, check_algorithm);
+			return retval;
+		}
 	}
 
 	arm_algo.common_magic = ARM_COMMON_MAGIC;
@@ -1627,26 +1749,24 @@ int arm_blank_check_memory(struct target *target,
 			exit_var,
 			10000, &arm_algo);
 
-	if (retval == ERROR_OK)
+	if (retval == ERROR_OK) {
 		blocks[0].result = buf_get_u32(reg_params[2].value, 0, 32);
+		*checked = 1;	/* only one block has been checked */
+	}
 
 	destroy_reg_param(&reg_params[0]);
 	destroy_reg_param(&reg_params[1]);
 	destroy_reg_param(&reg_params[2]);
 
-cleanup:
 	target_free_working_area(target, check_algorithm);
 
-	if (retval != ERROR_OK)
-		return retval;
-
-	return 1;       /* only one block has been checked */
+	return retval;
 }
 
 static int arm_full_context(struct target *target)
 {
 	struct arm *arm = target_to_arm(target);
-	unsigned num_regs = arm->core_cache->num_regs;
+	unsigned int num_regs = arm->core_cache->num_regs;
 	struct reg *reg = arm->core_cache->reg_list;
 	int retval = ERROR_OK;
 
@@ -1663,7 +1783,15 @@ static int arm_default_mrc(struct target *target, int cpnum,
 	uint32_t crn, uint32_t crm,
 	uint32_t *value)
 {
-	LOG_ERROR("%s doesn't implement MRC", target_type_name(target));
+	LOG_TARGET_ERROR(target, "%s doesn't implement MRC", target_type_name(target));
+	return ERROR_FAIL;
+}
+
+static int arm_default_mrrc(struct target *target, int cpnum,
+	uint32_t op, uint32_t crm,
+	uint64_t *value)
+{
+	LOG_TARGET_ERROR(target, "%s doesn't implement MRRC", target_type_name(target));
 	return ERROR_FAIL;
 }
 
@@ -1672,7 +1800,15 @@ static int arm_default_mcr(struct target *target, int cpnum,
 	uint32_t crn, uint32_t crm,
 	uint32_t value)
 {
-	LOG_ERROR("%s doesn't implement MCR", target_type_name(target));
+	LOG_TARGET_ERROR(target, "%s doesn't implement MCR", target_type_name(target));
+	return ERROR_FAIL;
+}
+
+static int arm_default_mcrr(struct target *target, int cpnum,
+	uint32_t op, uint32_t crm,
+	uint64_t value)
+{
+	LOG_TARGET_ERROR(target, "%s doesn't implement MCRR", target_type_name(target));
 	return ERROR_FAIL;
 }
 
@@ -1695,8 +1831,12 @@ int arm_init_arch_info(struct target *target, struct arm *arm)
 
 	if (!arm->mrc)
 		arm->mrc = arm_default_mrc;
+	if (!arm->mrrc)
+		arm->mrrc = arm_default_mrrc;
 	if (!arm->mcr)
 		arm->mcr = arm_default_mcr;
+	if (!arm->mcrr)
+		arm->mcrr = arm_default_mcrr;
 
 	return ERROR_OK;
 }

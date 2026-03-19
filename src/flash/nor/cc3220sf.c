@@ -65,10 +65,10 @@ static int cc3220sf_mass_erase(struct flash_bank *bank)
 			done = true;
 		} else {
 			elapsed_ms = timeval_ms() - start_ms;
-			if (elapsed_ms > 500)
-				keep_alive();
 			if (elapsed_ms > FLASH_TIMEOUT)
 				break;
+
+			keep_alive();
 		}
 	}
 
@@ -96,7 +96,6 @@ FLASH_BANK_COMMAND_HANDLER(cc3220sf_flash_bank_command)
 
 	/* Finish initialization of flash bank */
 	bank->driver_priv = cc3220sf_bank;
-	bank->next = NULL;
 
 	return ERROR_OK;
 }
@@ -153,10 +152,10 @@ static int cc3220sf_erase(struct flash_bank *bank, unsigned int first,
 				done = true;
 			} else {
 				elapsed_ms = timeval_ms() - start_ms;
-				if (elapsed_ms > 500)
-					keep_alive();
 				if (elapsed_ms > FLASH_TIMEOUT)
 					break;
+
+				keep_alive();
 			}
 		}
 

@@ -68,7 +68,7 @@ static int str9xpec_erase_area(struct flash_bank *bank, unsigned int first,
 static int str9xpec_set_address(struct flash_bank *bank, uint8_t sector);
 static int str9xpec_write_options(struct flash_bank *bank);
 
-static int str9xpec_set_instr(struct jtag_tap *tap, uint32_t new_instr, tap_state_t end_state)
+static int str9xpec_set_instr(struct jtag_tap *tap, uint32_t new_instr, enum tap_state end_state)
 {
 	if (!tap)
 		return ERROR_TARGET_INVALID;
@@ -206,28 +206,28 @@ static int str9xpec_build_block_list(struct flash_bank *bank)
 	int b1_size = 0x2000;
 
 	switch (bank->size) {
-		case (256 * 1024):
-			b0_sectors = 4;
-			break;
-		case (512 * 1024):
-			b0_sectors = 8;
-			break;
-		case (1024 * 1024):
-			b0_sectors = 16;
-			break;
-		case (2048 * 1024):
-			b0_sectors = 32;
-			break;
-		case (128 * 1024):
-			b1_size = 0x4000;
-			b1_sectors = 8;
-			break;
-		case (32 * 1024):
-			b1_sectors = 4;
-			break;
-		default:
-			LOG_ERROR("BUG: unknown bank->size encountered");
-			exit(-1);
+	case (256 * 1024):
+		b0_sectors = 4;
+		break;
+	case (512 * 1024):
+		b0_sectors = 8;
+		break;
+	case (1024 * 1024):
+		b0_sectors = 16;
+		break;
+	case (2048 * 1024):
+		b0_sectors = 32;
+		break;
+	case (128 * 1024):
+		b1_size = 0x4000;
+		b1_sectors = 8;
+		break;
+	case (32 * 1024):
+		b1_sectors = 4;
+		break;
+	default:
+		LOG_ERROR("BUG: unknown bank->size encountered");
+		exit(-1);
 	}
 
 	num_sectors = b0_sectors + b1_sectors;
@@ -735,7 +735,7 @@ COMMAND_HANDLER(str9xpec_handle_part_id_command)
 
 	idcode = buf_get_u32(buffer, 0, 32);
 
-	command_print(CMD, "str9xpec part id: 0x%8.8" PRIx32 "", idcode);
+	command_print(CMD, "str9xpec part id: 0x%8.8" PRIx32, idcode);
 
 	free(buffer);
 

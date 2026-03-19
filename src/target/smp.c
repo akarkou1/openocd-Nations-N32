@@ -54,16 +54,13 @@ int gdb_read_smp_packet(struct connection *connection,
 	LOG_WARNING(DEPRECATED_MSG);
 
 	if (target->smp) {
-		if (strncmp(packet, "jc", 2) == 0) {
-			const uint32_t len = sizeof(target->gdb_service->core[0]);
-			char hex_buffer[len * 2 + 1];
-			uint8_t buffer[len];
-			buf_set_u32(buffer, 0, len * 8, target->gdb_service->core[0]);
-			size_t pkt_len = hexify(hex_buffer, buffer, sizeof(buffer),
-				sizeof(hex_buffer));
-
-			retval = gdb_put_packet(connection, hex_buffer, pkt_len);
-		}
+		const uint32_t len = sizeof(target->gdb_service->core[0]);
+		char hex_buffer[len * 2 + 1];
+		uint8_t buffer[len];
+		buf_set_u32(buffer, 0, len * 8, target->gdb_service->core[0]);
+		size_t pkt_len = hexify(hex_buffer, buffer, sizeof(buffer),
+			sizeof(hex_buffer));
+		retval = gdb_put_packet(connection, hex_buffer, pkt_len);
 	} else
 		retval = gdb_put_packet(connection, "E01", 3);
 	return retval;
@@ -119,7 +116,7 @@ COMMAND_HANDLER(default_handle_smp_command)
 			head->target->smp = 0;
 
 		/* fixes the target display to the debugger */
-		if (!list_empty(target->smp_targets))
+		if (!list_empty(target->smp_targets) && target->gdb_service)
 			target->gdb_service->target = target;
 
 		return ERROR_OK;
@@ -132,6 +129,9 @@ COMMAND_HANDLER(handle_smp_gdb_command)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	int retval = ERROR_OK;
+
+	LOG_WARNING(DEPRECATED_MSG);
+
 	if (!list_empty(target->smp_targets)) {
 		if (CMD_ARGC == 1) {
 			int coreid = 0;

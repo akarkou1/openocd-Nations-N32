@@ -17,9 +17,6 @@
 #include "fileio.h"
 #include <target/target.h>
 
-/* to be removed */
-extern struct nand_device *nand_devices;
-
 COMMAND_HANDLER(handle_nand_list_command)
 {
 	struct nand_device *p;
@@ -53,21 +50,22 @@ COMMAND_HANDLER(handle_nand_info_command)
 	int last = -1;
 
 	switch (CMD_ARGC) {
-		default:
-			return ERROR_COMMAND_SYNTAX_ERROR;
-		case 1:
-			first = 0;
-			last = INT32_MAX;
-			break;
-		case 2:
-			COMMAND_PARSE_NUMBER(int, CMD_ARGV[1], i);
-			first = last = i;
-			i = 0;
-			break;
-		case 3:
-			COMMAND_PARSE_NUMBER(int, CMD_ARGV[1], first);
-			COMMAND_PARSE_NUMBER(int, CMD_ARGV[2], last);
-			break;
+	case 1:
+		first = 0;
+		last = INT32_MAX;
+		break;
+	case 2:
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[1], i);
+		first = i;
+		last = i;
+		i = 0;
+		break;
+	case 3:
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[1], first);
+		COMMAND_PARSE_NUMBER(int, CMD_ARGV[2], last);
+		break;
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	struct nand_device *p;

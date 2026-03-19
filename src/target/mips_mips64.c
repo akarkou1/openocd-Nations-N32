@@ -473,7 +473,7 @@ static int mips_mips64_set_watchpoint(struct target *target,
 	if (retval != ERROR_OK)
 		return retval;
 
-	LOG_DEBUG("wp_num %i bp_value 0x%" PRIx64 "", wp_num, c->bp_value);
+	LOG_DEBUG("wp_num %i bp_value 0x%" PRIx64, wp_num, c->bp_value);
 
 	return ERROR_OK;
 }
@@ -592,9 +592,9 @@ static int mips_mips64_unset_breakpoint(struct target *target,
 	return ERROR_OK;
 }
 
-static int mips_mips64_resume(struct target *target, int current,
-			      uint64_t address, int handle_breakpoints,
-			      int debug_execution)
+static int mips_mips64_resume(struct target *target, bool current,
+			      uint64_t address, bool handle_breakpoints,
+			      bool debug_execution)
 {
 	struct mips64_common *mips64 = target->arch_info;
 	struct mips_ejtag *ejtag_info = &mips64->ejtag_info;
@@ -606,7 +606,7 @@ static int mips_mips64_resume(struct target *target, int current,
 		address = mips64_extend_sign(address);
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted %d", target->state);
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -622,11 +622,11 @@ static int mips_mips64_resume(struct target *target, int current,
 	}
 
 	pc = &mips64->core_cache->reg_list[MIPS64_PC];
-	/* current = 1: continue on current pc, otherwise continue at <address> */
+	/* current = true: continue on current pc, otherwise continue at <address> */
 	if (!current) {
 		buf_set_u64(pc->value, 0, 64, address);
-		pc->dirty = 1;
-		pc->valid = 1;
+		pc->dirty = true;
+		pc->valid = true;
 	}
 
 	resume_pc = buf_get_u64(pc->value, 0, 64);
@@ -642,7 +642,7 @@ static int mips_mips64_resume(struct target *target, int current,
 		/* Single step past breakpoint at current address */
 		bp = breakpoint_find(target, (uint64_t) resume_pc);
 		if (bp) {
-			LOG_DEBUG("unset breakpoint at 0x%16.16" PRIx64 "",
+			LOG_DEBUG("unset breakpoint at 0x%16.16" PRIx64,
 				  bp->address);
 			retval = mips_mips64_unset_breakpoint(target, bp);
 			if (retval != ERROR_OK)
@@ -682,7 +682,7 @@ static int mips_mips64_resume(struct target *target, int current,
 		if (retval != ERROR_OK)
 			return retval;
 
-		LOG_DEBUG("target resumed at 0x%" PRIx64 "", resume_pc);
+		LOG_DEBUG("target resumed at 0x%" PRIx64, resume_pc);
 	} else {
 		target->state = TARGET_DEBUG_RUNNING;
 		retval = target_call_event_callbacks(target,
@@ -690,14 +690,14 @@ static int mips_mips64_resume(struct target *target, int current,
 		if (retval != ERROR_OK)
 			return retval;
 
-		LOG_DEBUG("target debug resumed at 0x%" PRIx64 "", resume_pc);
+		LOG_DEBUG("target debug resumed at 0x%" PRIx64, resume_pc);
 	}
 
 	return ERROR_OK;
 }
 
-static int mips_mips64_step(struct target *target, int current,
-			    uint64_t address, int handle_breakpoints)
+static int mips_mips64_step(struct target *target, bool current,
+			    uint64_t address, bool handle_breakpoints)
 {
 	struct mips64_common *mips64 = target->arch_info;
 	struct mips_ejtag *ejtag_info = &mips64->ejtag_info;
@@ -706,19 +706,19 @@ static int mips_mips64_step(struct target *target, int current,
 	int retval = ERROR_OK;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
 	if (mips64->mips64mode32)
 		address = mips64_extend_sign(address);
 
-	/* current = 1: continue on current pc, otherwise continue at
+	/* current = true: continue on current pc, otherwise continue at
 	 * <address> */
 	if (!current) {
 		buf_set_u64(pc->value, 0, 64, address);
-		pc->dirty = 1;
-		pc->valid = 1;
+		pc->dirty = true;
+		pc->valid = true;
 	}
 
 	/* the front-end may request us not to handle breakpoints */
@@ -804,7 +804,7 @@ static int mips_mips64_remove_breakpoint(struct target *target,
 	int retval = ERROR_OK;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -865,7 +865,7 @@ static int mips_mips64_remove_watchpoint(struct target *target,
 	int retval = ERROR_OK;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -886,7 +886,7 @@ static int mips_mips64_read_memory(struct target *target, uint64_t address,
 	void *t;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted %d", target->state);
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -911,7 +911,7 @@ static int mips_mips64_read_memory(struct target *target, uint64_t address,
 	} else
 		t = buffer;
 
-	LOG_DEBUG("address: 0x%16.16" PRIx64 ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32 "",
+	LOG_DEBUG("address: 0x%16.16" PRIx64 ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32,
 		  address, size, count);
 	retval = mips64_pracc_read_mem(ejtag_info, address, size, count,
 				       (void *)t);
@@ -949,7 +949,7 @@ static int mips_mips64_bulk_write_memory(struct target *target,
 	struct working_area *fast_data_area;
 	int retval;
 
-	LOG_DEBUG("address: " TARGET_ADDR_FMT ", count: 0x%8.8" PRIx32 "",
+	LOG_DEBUG("address: " TARGET_ADDR_FMT ", count: 0x%8.8" PRIx32,
 		  address, count);
 
 	if (address & 0x7)
@@ -1014,7 +1014,7 @@ static int mips_mips64_write_memory(struct target *target, uint64_t address,
 	int retval;
 
 	if (target->state != TARGET_HALTED) {
-		LOG_WARNING("target not halted");
+		LOG_TARGET_ERROR(target, "not halted");
 		return ERROR_TARGET_NOT_HALTED;
 	}
 
@@ -1066,7 +1066,7 @@ static int mips_mips64_write_memory(struct target *target, uint64_t address,
 		buffer = t;
 	}
 
-	LOG_DEBUG("address: 0x%16.16" PRIx64 ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32 "",
+	LOG_DEBUG("address: 0x%16.16" PRIx64 ", size: 0x%8.8" PRIx32 ", count: 0x%8.8" PRIx32,
 		  address, size, count);
 
 	retval = mips64_pracc_write_mem(ejtag_info, address, size, count,
@@ -1082,7 +1082,7 @@ static int mips_mips64_init_target(struct command_context *cmd_ctx,
 	return mips64_build_reg_cache(target);
 }
 
-static int mips_mips64_target_create(struct target *target, Jim_Interp *interp)
+static int mips_mips64_target_create(struct target *target)
 {
 	struct mips_mips64_common *mips_mips64;
 	struct mips64_common *mips64;

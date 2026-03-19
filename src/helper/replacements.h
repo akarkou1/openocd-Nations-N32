@@ -66,12 +66,10 @@ int gettimeofday(struct timeval *tv, struct timezone *tz);
 
 #endif
 
-#ifndef IN_REPLACEMENTS_C
-/**** clear_malloc & fill_malloc ****/
 void *clear_malloc(size_t size);
 void *fill_malloc(size_t size);
-#endif
 
+#ifndef IN_REPLACEMENTS_C
 /*
  * Now you have 3 ways for the malloc function:
  *
@@ -100,6 +98,7 @@ void *fill_malloc(size_t size);
 
 /* #define malloc(_a) clear_malloc(_a)
  * #define malloc(_a) fill_malloc(_a) */
+#endif  /* IN_REPLACEMENTS_C */
 
 /* GNU extensions to the C library that may be missing on some systems */
 #ifndef HAVE_STRNDUP
@@ -112,7 +111,7 @@ size_t strnlen(const char *s, size_t maxlen);
 
 #ifndef HAVE_USLEEP
 #ifdef _WIN32
-static inline unsigned usleep(unsigned int usecs)
+static inline unsigned int usleep(unsigned int usecs)
 {
 	Sleep((usecs/1000));
 	return 0;
@@ -223,6 +222,20 @@ static inline int socket_select(int max_fd,
 	return win_select(max_fd, rfds, wfds, efds, tv);
 #else
 	return select(max_fd, rfds, wfds, efds, tv);
+#endif
+}
+
+static inline int socket_recv_timeout(int fd, unsigned long timeout_msec)
+{
+#ifdef _WIN32
+	DWORD timeout = timeout_msec;
+	return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout,
+			sizeof(timeout));
+#else
+	struct timeval tv;
+	tv.tv_sec = timeout_msec / 1000;
+	tv.tv_usec = (timeout_msec % 1000) * 1000;
+	return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
 #endif
 }
 

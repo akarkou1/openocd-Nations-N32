@@ -15,6 +15,7 @@
 #define OPENOCD_TARGET_ARMV7M_H
 
 #include "arm.h"
+#include "armv7m_cache.h"
 #include "armv7m_trace.h"
 
 struct adiv5_ap;
@@ -58,10 +59,13 @@ enum {
 	ARMV8M_REGSEL_PSPLIM_S,
 	ARMV8M_REGSEL_MSPLIM_NS,
 	ARMV8M_REGSEL_PSPLIM_NS,
+	ARMV8M_REGSEL_MSPLIM = ARMV8M_REGSEL_MSPLIM_NS,
+	ARMV8M_REGSEL_PSPLIM = ARMV8M_REGSEL_PSPLIM_NS,
 
 	ARMV7M_REGSEL_PMSK_BPRI_FLTMSK_CTRL = 0x14,
 	ARMV8M_REGSEL_PMSK_BPRI_FLTMSK_CTRL_S = 0x22,
 	ARMV8M_REGSEL_PMSK_BPRI_FLTMSK_CTRL_NS = 0x23,
+	ARMV8M_REGSEL_VPR = 0x24,
 	ARMV7M_REGSEL_FPSCR = 0x21,
 
 	/* 32bit Floating-point registers */
@@ -148,6 +152,8 @@ enum {
 	/* The end of block of container and contained registers */
 
 	/* ARMv8-M specific registers */
+	ARMV8M_MSPLIM,
+	ARMV8M_PSPLIM,
 	ARMV8M_MSP_NS,
 	ARMV8M_PSP_NS,
 	ARMV8M_MSP_S,
@@ -196,14 +202,17 @@ enum {
 	/* Floating-point status register */
 	ARMV7M_FPSCR,
 
+	/* Vector Predication Status and Control Register */
+	ARMV8M_VPR,
+
 	/* for convenience add registers' block delimiters */
 	ARMV7M_LAST_REG,
 	ARMV7M_CORE_FIRST_REG = ARMV7M_R0,
 	ARMV7M_CORE_LAST_REG = ARMV7M_XPSR,
 	ARMV7M_FPU_FIRST_REG = ARMV7M_D0,
-	ARMV7M_FPU_LAST_REG = ARMV7M_FPSCR,
-	ARMV8M_FIRST_REG = ARMV8M_MSP_NS,
-	ARMV8M_LAST_REG = ARMV8M_CONTROL_NS,
+	ARMV7M_FPU_LAST_REG = ARMV8M_VPR,
+	ARMV8M_TZ_FIRST_REG = ARMV8M_MSP_NS,
+	ARMV8M_TZ_LAST_REG = ARMV8M_CONTROL_NS,
 };
 
 enum {
@@ -211,6 +220,8 @@ enum {
 	FPV4_SP,
 	FPV5_SP,
 	FPV5_DP,
+	FPV5_MVE_I,
+	FPV5_MVE_F,
 };
 
 #define ARMV7M_NUM_CORE_REGS (ARMV7M_CORE_LAST_REG - ARMV7M_CORE_FIRST_REG + 1)
@@ -232,6 +243,8 @@ struct armv7m_common {
 
 	/* hla_target uses a high level adapter that does not support all functions */
 	bool is_hla_target;
+
+	struct armv7m_cache_common armv7m_cache;
 
 	struct armv7m_trace_config trace_config;
 
@@ -314,7 +327,7 @@ int armv7m_run_algorithm(struct target *target,
 		int num_mem_params, struct mem_param *mem_params,
 		int num_reg_params, struct reg_param *reg_params,
 		target_addr_t entry_point, target_addr_t exit_point,
-		int timeout_ms, void *arch_info);
+		unsigned int timeout_ms, void *arch_info);
 
 int armv7m_start_algorithm(struct target *target,
 		int num_mem_params, struct mem_param *mem_params,
@@ -325,7 +338,7 @@ int armv7m_start_algorithm(struct target *target,
 int armv7m_wait_algorithm(struct target *target,
 		int num_mem_params, struct mem_param *mem_params,
 		int num_reg_params, struct reg_param *reg_params,
-		target_addr_t exit_point, int timeout_ms,
+		target_addr_t exit_point, unsigned int timeout_ms,
 		void *arch_info);
 
 int armv7m_invalidate_core_regs(struct target *target);
@@ -340,7 +353,8 @@ bool armv7m_map_reg_packing(unsigned int arm_reg_id,
 int armv7m_checksum_memory(struct target *target,
 		target_addr_t address, uint32_t count, uint32_t *checksum);
 int armv7m_blank_check_memory(struct target *target,
-		struct target_memory_check_block *blocks, int num_blocks, uint8_t erased_value);
+		struct target_memory_check_block *blocks, unsigned int num_blocks,
+		uint8_t erased_value, unsigned int *checked);
 
 int armv7m_maybe_skip_bkpt_inst(struct target *target, bool *inst_found);
 

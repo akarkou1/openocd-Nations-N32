@@ -359,6 +359,27 @@ proc parport_cable args {
 	eval parport cable $args
 }
 
+lappend _telnet_autocomplete_skip parport_select_cable
+proc parport_select_cable {cable} {
+	echo "DEPRECATED! Do not use 'parport cable' but use a cable configuration file in interface/parport"
+
+	switch $cable {
+		"wiggler" { source [find interface/parport/wiggler.cfg] }
+		"wiggler2" { source [find interface/parport/wiggler2.cfg] }
+		"wiggler_ntrst_inverted" { source [find interface/parport/wiggler-ntrst-inverted.cfg] }
+		"old_amt_wiggler" { source [find interface/parport/amt-wiggler-old.cfg ] }
+		"arm-jtag" { source [find interface/parport/arm-jtag.cfg] }
+		"chameleon" { source [find interface/parport/chameleon.cfg] }
+		"dlc5" { source [find interface/parport/dlc5.cfg] }
+		"triton" { source [find interface/parport/triton.cfg] }
+		"lattice" { source [find interface/parport/lattice.cfg] }
+		"flashlink" { source [find interface/parport/flashlink.cfg] }
+		"altium" { source [find interface/parport/altium.cfg] }
+		"aspo" { source [find interface/parport/aspo.cfg] }
+		default { error "invalid parallel port cable '$cable'" }
+	}
+}
+
 lappend _telnet_autocomplete_skip parport_write_on_exit
 proc parport_write_on_exit args {
 	echo "DEPRECATED! use 'parport write_on_exit' not 'parport_write_on_exit'"
@@ -411,6 +432,12 @@ lappend _telnet_autocomplete_skip xlnx_pcie_xvc_config
 proc xlnx_pcie_xvc_config args {
 	echo "DEPRECATED! use 'xlnx_pcie_xvc config' not 'xlnx_pcie_xvc_config'"
 	eval xlnx_pcie_xvc config $args
+}
+
+lappend _telnet_autocomplete_skip xlnx_axi_xvc_config
+proc xlnx_axi_xvc_config args {
+	echo "DEPRECATED! use 'xlnx_axi_xvc config' not 'xlnx_axi_xvc_config'"
+	eval xlnx_axi_xvc config $args
 }
 
 lappend _telnet_autocomplete_skip ulink_download_firmware
@@ -1106,6 +1133,203 @@ proc "am335xgpio led_on_state" {state} {
 		default
 			{return -code 1 -level 1 "am335xgpio led_on_state: syntax error"}
 	}
+}
+
+lappend _telnet_autocomplete_skip "cmsis_dap_backend"
+proc "cmsis_dap_backend" {backend} {
+	echo "DEPRECATED! use 'cmsis-dap backend', not 'cmsis_dap_backend'"
+	eval cmsis-dap backend $backend
+}
+
+lappend _telnet_autocomplete_skip "cmsis_dap_vid_pid"
+proc "cmsis_dap_vid_pid" {args} {
+	echo "DEPRECATED! use 'cmsis-dap vid_pid', not 'cmsis_dap_vid_pid'"
+	eval cmsis-dap vid_pid $args
+}
+
+lappend _telnet_autocomplete_skip "cmsis_dap_usb"
+proc "cmsis_dap_usb" {args} {
+	echo "DEPRECATED! use 'cmsis-dap usb', not 'cmsis_dap_usb'"
+	eval cmsis-dap usb $args
+}
+
+lappend _telnet_autocomplete_skip "hla_layout"
+proc "hla_layout" {layout} {
+	echo "DEPRECATED! use 'hla layout', not 'hla_layout'"
+	eval hla layout $layout
+}
+
+lappend _telnet_autocomplete_skip "hla_device_desc"
+proc "hla_device_desc" {desc} {
+	echo "DEPRECATED! use 'hla device_desc', not 'hla_device_desc'"
+	eval hla device_desc $desc
+}
+
+lappend _telnet_autocomplete_skip "hla_vid_pid"
+proc "hla_vid_pid" {args} {
+	echo "DEPRECATED! use 'hla vid_pid', not 'hla_vid_pid'"
+	eval hla vid_pid $args
+}
+
+lappend _telnet_autocomplete_skip "hla_command"
+proc "hla_command" {command} {
+	echo "DEPRECATED! use 'hla command', not 'hla_command'"
+	eval hla command $command
+}
+
+lappend _telnet_autocomplete_skip "hla_stlink_backend"
+proc "hla_stlink_backend" {args} {
+	echo "DEPRECATED! use 'hla stlink_backend', not 'hla_stlink_backend'"
+	eval hla stlink_backend $args
+}
+
+lappend _telnet_autocomplete_skip "kitprog_init_acquire_psoc"
+proc "kitprog_init_acquire_psoc" {} {
+	echo "DEPRECATED! use 'kitprog init_acquire_psoc', not 'kitprog_init_acquire_psoc'"
+	eval kitprog init_acquire_psoc
+}
+
+lappend _telnet_autocomplete_skip "pld device"
+proc "pld device" {driver tap_name {opt 0}} {
+	echo "DEPRECATED! use 'pld create ...', not 'pld device ...'"
+	if {[string is integer -strict $opt]} {
+		if {$opt == 0} {
+			eval pld create [lindex [split $tap_name .] 0].pld $driver -chain-position $tap_name
+		} else {
+			eval pld create [lindex [split $tap_name .] 0].pld $driver -chain-position $tap_name -no_jstart
+		}
+	} else {
+		eval pld create [lindex [split $tap_name .] 0].pld $driver -chain-position $tap_name -family $opt
+	}
+}
+
+lappend _telnet_autocomplete_skip "ipdbg -start"
+proc "ipdbg -start" {args} {
+	echo "DEPRECATED! use 'ipdbg create-hub' and 'chip.ipdbghub start ...', not 'ipdbg -start ...'"
+	set tap_name ""
+	set pld_name ""
+	set tool_num "1"
+	set port_num "4242"
+	set idx 0
+	set num_args [llength $args]
+	while {$idx < $num_args} {
+		set arg [lindex $args $idx]
+		switch -- $arg {
+			"-tap" {
+				incr idx
+				if {$idx >= $num_args || [string index [lindex $args $idx] 0] == "-"} {
+					echo "no TAP name given"
+					return
+				}
+				set tap_name [lindex $args $idx]
+			}
+			"-pld" {
+				incr idx
+				if {$idx >= $num_args || [string index [lindex $args $idx] 0] == "-"} {
+					echo "no PLD name given"
+					return
+				}
+				set pld_name [lindex $args $idx]
+			}
+			"-tool" {
+				if {[expr {$idx + 1}] < $num_args && [string index [lindex $args [expr {$idx + 1}]] 0] != "-"} {
+					set tool_num [lindex $args [expr {$idx + 1}]]
+					set args [lreplace $args [expr {$idx + 1}] [expr {$idx + 1}]]
+					incr num_args -1
+				}
+				set args [lreplace $args $idx $idx]
+				incr num_args -1
+				incr idx -1
+			}
+			"-port" {
+				if {[expr {$idx + 1}] < $num_args && [string index [lindex $args [expr {$idx + 1}]] 0] != "-"} {
+					set port_num [lindex $args [expr {$idx + 1}]]
+					set args [lreplace $args [expr {$idx + 1}] [expr {$idx + 1}]]
+					incr num_args -1
+				}
+				set args [lreplace $args $idx $idx]
+				incr num_args -1
+				incr idx -1
+			}
+			"-hub" {
+				set args [lreplace $args $idx $idx "-ir" ]
+			}
+			default {
+#				don't touch remaining arguments
+			}
+		}
+		incr idx
+	}
+
+	set hub_name ""
+	if {$tap_name != ""} {
+		set hub_name [lindex [split $tap_name .] 0].ipdbghub
+	} elseif {$pld_name != ""} {
+		set hub_name [lindex [split $pld_name .] 0].ipdbghub
+	} else {
+		echo "parsing arguments failed: no tap and no pld given."
+		return
+	}
+
+	catch {eval ipdbg create-hub $hub_name $args}
+
+	eval $hub_name start -tool $tool_num -port $port_num
+}
+
+lappend _telnet_autocomplete_skip "ipdbg -stop"
+proc "ipdbg -stop" {args} {
+	echo "DEPRECATED! use 'chip.ipdbghub stop ...', not 'ipdbg -stop ...'"
+	set tap_name ""
+	set pld_name ""
+	set tool_num "1"
+	set idx 0
+	set num_args [llength $args]
+	while {$idx < $num_args} {
+		set arg [lindex $args $idx]
+		switch -- $arg {
+			"-tap" {
+				incr idx
+				if {$idx >= $num_args || [string index [lindex $args $idx] 0] == "-"} {
+					echo "no TAP name given"
+					return
+				}
+				set tap_name [lindex $args $idx]
+			}
+			"-pld" {
+				incr idx
+				if {$idx >= $num_args || [string index [lindex $args $idx] 0] == "-"} {
+					echo "no PLD name given"
+					return
+				}
+				set pld_name [lindex $args $idx]
+			}
+			"-tool" {
+				if {[expr {$idx + 1}] < $num_args && [string index [lindex $args [expr {$idx + 1}]] 0] != "-"} {
+					set tool_num [lindex $args [expr {$idx + 1}]]
+				}
+			}
+			default {
+#				don't touch remaining arguments
+			}
+		}
+		incr idx
+	}
+
+	set hub_name ""
+	if {$tap_name != ""} {
+		set hub_name [lindex [split $tap_name .] 0].ipdbghub
+	} elseif {$pld_name != ""} {
+		set hub_name [lindex [split $pld_name .] 0].ipdbghub
+	} else {
+		echo "parsing arguments failed: no tap and no pld given."
+		return
+	}
+
+	eval $hub_name stop -tool $tool_num
+}
+
+proc ipdbg {cmd args} {
+	tailcall "ipdbg $cmd" {*}$args
 }
 
 # END MIGRATION AIDS

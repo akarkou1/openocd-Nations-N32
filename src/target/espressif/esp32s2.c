@@ -17,33 +17,12 @@
 #include "esp_xtensa.h"
 #include "esp_xtensa_semihosting.h"
 
-/* Overall memory map
- * TODO: read memory configuration from target registers */
-#define ESP32_S2_IROM_MASK_LOW          0x40000000
-#define ESP32_S2_IROM_MASK_HIGH         0x40020000
-#define ESP32_S2_IRAM_LOW               0x40020000
-#define ESP32_S2_IRAM_HIGH              0x40070000
-#define ESP32_S2_DRAM_LOW               0x3ffb0000
-#define ESP32_S2_DRAM_HIGH              0x40000000
-#define ESP32_S2_RTC_IRAM_LOW           0x40070000
-#define ESP32_S2_RTC_IRAM_HIGH          0x40072000
-#define ESP32_S2_RTC_DRAM_LOW           0x3ff9e000
-#define ESP32_S2_RTC_DRAM_HIGH          0x3ffa0000
 #define ESP32_S2_RTC_DATA_LOW           0x50000000
 #define ESP32_S2_RTC_DATA_HIGH          0x50002000
-#define ESP32_S2_EXTRAM_DATA_LOW        0x3f500000
-#define ESP32_S2_EXTRAM_DATA_HIGH       0x3ff80000
 #define ESP32_S2_DR_REG_LOW             0x3f400000
 #define ESP32_S2_DR_REG_HIGH            0x3f4d3FFC
 #define ESP32_S2_SYS_RAM_LOW            0x60000000UL
 #define ESP32_S2_SYS_RAM_HIGH           (ESP32_S2_SYS_RAM_LOW + 0x20000000UL)
-/* ESP32-S2 DROM mapping is not contiguous. */
-/* IDF declares this as 0x3F000000..0x3FF80000, but there are peripheral registers mapped to
- * 0x3f400000..0x3f4d3FFC. */
-#define ESP32_S2_DROM0_LOW              ESP32_S2_DROM_LOW
-#define ESP32_S2_DROM0_HIGH             ESP32_S2_DR_REG_LOW
-#define ESP32_S2_DROM1_LOW              ESP32_S2_DR_REG_HIGH
-#define ESP32_S2_DROM1_HIGH             ESP32_S2_DROM_HIGH
 
 /* ESP32 WDT */
 #define ESP32_S2_WDT_WKEY_VALUE         0x50d83aa1
@@ -293,8 +272,8 @@ static int esp32s2_soc_reset(struct target *target)
 		alive_sleep(10);
 		xtensa_poll(target);
 		if (timeval_ms() >= timeout) {
-			LOG_TARGET_ERROR(target, "Timed out waiting for CPU to be reset, target state=%d",
-				target->state);
+			LOG_TARGET_ERROR(target, "Timed out waiting for CPU to be reset, target state %s",
+				target_state_name(target));
 			return ERROR_TARGET_TIMEOUT;
 		}
 	}
@@ -385,10 +364,14 @@ static int esp32s2_arch_state(struct target *target)
 
 static int esp32s2_on_halt(struct target *target)
 {
-	return esp32s2_disable_wdts(target);
+	int ret = esp32s2_disable_wdts(target);
+	if (ret == ERROR_OK)
+		ret = esp_xtensa_on_halt(target);
+	return ret;
 }
 
-static int esp32s2_step(struct target *target, int current, target_addr_t address, int handle_breakpoints)
+static int esp32s2_step(struct target *target, bool current,
+		target_addr_t address, bool handle_breakpoints)
 {
 	int ret = xtensa_step(target, current, address, handle_breakpoints);
 	if (ret == ERROR_OK) {
@@ -415,7 +398,7 @@ static int esp32s2_poll(struct target *target)
 				if (ret == ERROR_OK && esp_xtensa->semihost.need_resume) {
 					esp_xtensa->semihost.need_resume = false;
 					/* Resume xtensa_resume will handle BREAK instruction. */
-					ret = target_resume(target, 1, 0, 1, 0);
+					ret = target_resume(target, true, 0, true, false);
 					if (ret != ERROR_OK) {
 						LOG_ERROR("Failed to resume target");
 						return ret;
@@ -462,7 +445,7 @@ static const struct esp_semihost_ops esp32s2_semihost_ops = {
 	.prepare = esp32s2_disable_wdts
 };
 
-static int esp32s2_target_create(struct target *target, Jim_Interp *interp)
+static int esp32s2_target_create(struct target *target)
 {
 	struct xtensa_debug_module_config esp32s2_dm_cfg = {
 		.dbg_ops = &esp32s2_dbg_ops,
@@ -495,6 +478,11 @@ static int esp32s2_target_create(struct target *target, Jim_Interp *interp)
 static const struct command_registration esp32s2_command_handlers[] = {
 	{
 		.chain = xtensa_command_handlers,
+	},
+	{
+		.name = "esp",
+		.usage = "",
+		.chain = esp32_apptrace_command_handlers,
 	},
 	{
 		.name = "arm",
@@ -534,6 +522,10 @@ struct target_type esp32s2_target = {
 	.get_gdb_arch = xtensa_get_gdb_arch,
 	.get_gdb_reg_list = xtensa_get_gdb_reg_list,
 
+	.run_algorithm = xtensa_run_algorithm,
+	.start_algorithm = xtensa_start_algorithm,
+	.wait_algorithm = xtensa_wait_algorithm,
+
 	.add_breakpoint = esp_xtensa_breakpoint_add,
 	.remove_breakpoint = esp_xtensa_breakpoint_remove,
 
@@ -546,4 +538,5 @@ struct target_type esp32s2_target = {
 	.deinit_target = esp_xtensa_target_deinit,
 
 	.commands = esp32s2_command_handlers,
+	.profiling = esp_xtensa_profiling,
 };

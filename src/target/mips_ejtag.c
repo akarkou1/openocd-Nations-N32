@@ -47,7 +47,7 @@ int mips_ejtag_get_idcode(struct mips_ejtag *ejtag_info)
 	return mips_ejtag_drscan_32(ejtag_info, &ejtag_info->idcode);
 }
 
-static int mips_ejtag_get_impcode(struct mips_ejtag *ejtag_info)
+int mips_ejtag_get_impcode(struct mips_ejtag *ejtag_info)
 {
 	mips_ejtag_set_instr(ejtag_info, EJTAG_INST_IMPCODE);
 
@@ -245,7 +245,7 @@ int mips_ejtag_enter_debug(struct mips_ejtag *ejtag_info)
 	/* break bit will be cleared by hardware */
 	ejtag_ctrl = ejtag_info->ejtag_ctrl;
 	mips_ejtag_drscan_32(ejtag_info, &ejtag_ctrl);
-	LOG_DEBUG("ejtag_ctrl: 0x%8.8" PRIx32 "", ejtag_ctrl);
+	LOG_DEBUG("ejtag_ctrl: 0x%8.8" PRIx32, ejtag_ctrl);
 	if ((ejtag_ctrl & EJTAG_CTRL_BRKST) == 0)
 		goto error;
 
@@ -259,9 +259,12 @@ int mips_ejtag_exit_debug(struct mips_ejtag *ejtag_info)
 {
 	struct pa_list pracc_list = {.instr = MIPS32_DRET(ejtag_info->isa), .addr = 0};
 	struct pracc_queue_info ctx = {.max_code = 1, .pracc_list = &pracc_list, .code_count = 1, .store_count = 0};
+	struct mips32_common *mips32 = container_of(ejtag_info,
+					     struct mips32_common, ejtag_info);
 
 	/* execute our dret instruction */
-	ctx.retval = mips32_pracc_queue_exec(ejtag_info, &ctx, NULL, 0); /* shift out instr, omit last check */
+	ctx.retval = mips32_pracc_queue_exec(ejtag_info, &ctx, NULL,
+				      mips32->cpu_quirks & EJTAG_QUIRK_PAD_DRET);
 
 	/* pic32mx workaround, false pending at low core clock */
 	jtag_add_sleep(1000);
@@ -329,7 +332,7 @@ static void ejtag_v26_print_imp(struct mips_ejtag *ejtag_info)
 		EJTAG_IMP_HAS(EJTAG_V26_IMP_DINT) ? " DINT" : "");
 }
 
-static void ejtag_main_print_imp(struct mips_ejtag *ejtag_info)
+void ejtag_main_print_imp(struct mips_ejtag *ejtag_info)
 {
 	LOG_DEBUG("EJTAG main: features:%s%s%s%s%s",
 		EJTAG_IMP_HAS(EJTAG_IMP_ASID8) ? " ASID_8" : "",
@@ -339,18 +342,18 @@ static void ejtag_main_print_imp(struct mips_ejtag *ejtag_info)
 		EJTAG_IMP_HAS(EJTAG_IMP_MIPS64) ? " MIPS64" : " MIPS32");
 
 	switch (ejtag_info->ejtag_version) {
-		case EJTAG_VERSION_20:
-			ejtag_v20_print_imp(ejtag_info);
-			break;
-		case EJTAG_VERSION_25:
-		case EJTAG_VERSION_26:
-		case EJTAG_VERSION_31:
-		case EJTAG_VERSION_41:
-		case EJTAG_VERSION_51:
-			ejtag_v26_print_imp(ejtag_info);
-			break;
-		default:
-			break;
+	case EJTAG_VERSION_20:
+		ejtag_v20_print_imp(ejtag_info);
+		break;
+	case EJTAG_VERSION_25:
+	case EJTAG_VERSION_26:
+	case EJTAG_VERSION_31:
+	case EJTAG_VERSION_41:
+	case EJTAG_VERSION_51:
+		ejtag_v26_print_imp(ejtag_info);
+		break;
+	default:
+		break;
 	}
 }
 
@@ -366,27 +369,27 @@ int mips_ejtag_init(struct mips_ejtag *ejtag_info)
 	ejtag_info->ejtag_version = ((ejtag_info->impcode >> 29) & 0x07);
 
 	switch (ejtag_info->ejtag_version) {
-		case EJTAG_VERSION_20:
-			LOG_DEBUG("EJTAG: Version 1 or 2.0 Detected");
-			break;
-		case EJTAG_VERSION_25:
-			LOG_DEBUG("EJTAG: Version 2.5 Detected");
-			break;
-		case EJTAG_VERSION_26:
-			LOG_DEBUG("EJTAG: Version 2.6 Detected");
-			break;
-		case EJTAG_VERSION_31:
-			LOG_DEBUG("EJTAG: Version 3.1 Detected");
-			break;
-		case EJTAG_VERSION_41:
-			LOG_DEBUG("EJTAG: Version 4.1 Detected");
-			break;
-		case EJTAG_VERSION_51:
-			LOG_DEBUG("EJTAG: Version 5.1 Detected");
-			break;
-		default:
-			LOG_DEBUG("EJTAG: Unknown Version Detected");
-			break;
+	case EJTAG_VERSION_20:
+		LOG_DEBUG("EJTAG: Version 1 or 2.0 Detected");
+		break;
+	case EJTAG_VERSION_25:
+		LOG_DEBUG("EJTAG: Version 2.5 Detected");
+		break;
+	case EJTAG_VERSION_26:
+		LOG_DEBUG("EJTAG: Version 2.6 Detected");
+		break;
+	case EJTAG_VERSION_31:
+		LOG_DEBUG("EJTAG: Version 3.1 Detected");
+		break;
+	case EJTAG_VERSION_41:
+		LOG_DEBUG("EJTAG: Version 4.1 Detected");
+		break;
+	case EJTAG_VERSION_51:
+		LOG_DEBUG("EJTAG: Version 5.1 Detected");
+		break;
+	default:
+		LOG_DEBUG("EJTAG: Unknown Version Detected");
+		break;
 	}
 	ejtag_main_print_imp(ejtag_info);
 
@@ -490,7 +493,7 @@ int mips64_ejtag_config_step(struct mips_ejtag *ejtag_info, bool enable_step)
 		MIPS64_NOP,
 	};
 	const uint32_t *code = enable_step ? code_enable : code_disable;
-	unsigned code_len = enable_step ? ARRAY_SIZE(code_enable) :
+	unsigned int code_len = enable_step ? ARRAY_SIZE(code_enable) :
 					  ARRAY_SIZE(code_disable);
 
 	return mips64_pracc_exec(ejtag_info,

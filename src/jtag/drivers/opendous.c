@@ -99,15 +99,15 @@ static char *opendous_type;
 static const struct opendous_probe *opendous_probe;
 
 /* External interface functions */
-static int opendous_execute_queue(void);
+static int opendous_execute_queue(struct jtag_command *cmd_queue);
 static int opendous_init(void);
 static int opendous_quit(void);
 
 /* Queue command functions */
-static void opendous_end_state(tap_state_t state);
+static void opendous_end_state(enum tap_state state);
 static void opendous_state_move(void);
-static void opendous_path_move(int num_states, tap_state_t *path);
-static void opendous_runtest(int num_cycles);
+static void opendous_path_move(unsigned int num_states, enum tap_state *path);
+static void opendous_runtest(unsigned int num_cycles);
 static void opendous_scan(int ir_scan, enum scan_type type, uint8_t *buffer,
 		int scan_size, struct scan_command *command);
 static void opendous_reset(int trst, int srst);
@@ -134,10 +134,7 @@ static int opendous_usb_read(struct opendous_jtag *opendous_jtag);
 
 /* helper functions */
 static int opendous_get_version_info(void);
-
-#ifdef _DEBUG_USB_COMMS_
 static void opendous_debug_buffer(uint8_t *buffer, int length);
-#endif
 
 static struct opendous_jtag *opendous_jtag_handle;
 
@@ -173,26 +170,26 @@ COMMAND_HANDLER(opendous_handle_opendous_info_command)
 COMMAND_HANDLER(opendous_handle_opendous_hw_jtag_command)
 {
 	switch (CMD_ARGC) {
-		case 0:
-			command_print(CMD, "opendous hw jtag  %i", opendous_hw_jtag_version);
-			break;
+	case 0:
+		command_print(CMD, "opendous hw jtag  %i", opendous_hw_jtag_version);
+		break;
 
-		case 1: {
-			int request_version = atoi(CMD_ARGV[0]);
-			switch (request_version) {
-				case 2:
-				case 3:
-					opendous_hw_jtag_version = request_version;
-					break;
-
-			default:
-				return ERROR_COMMAND_SYNTAX_ERROR;
-			}
+	case 1: {
+		int request_version = atoi(CMD_ARGV[0]);
+		switch (request_version) {
+		case 2:
+		case 3:
+			opendous_hw_jtag_version = request_version;
 			break;
-		}
 
 		default:
 			return ERROR_COMMAND_SYNTAX_ERROR;
+		}
+		break;
+	}
+
+	default:
+		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
 	return ERROR_OK;
@@ -229,7 +226,8 @@ static struct jtag_interface opendous_interface = {
 
 struct adapter_driver opendous_adapter_driver = {
 	.name = "opendous",
-	.transports = jtag_only,
+	.transport_ids = TRANSPORT_JTAG,
+	.transport_preferred_id = TRANSPORT_JTAG,
 	.commands = opendous_command_handlers,
 
 	.init = opendous_init,
@@ -238,75 +236,74 @@ struct adapter_driver opendous_adapter_driver = {
 	.jtag_ops = &opendous_interface,
 };
 
-static int opendous_execute_queue(void)
+static int opendous_execute_queue(struct jtag_command *cmd_queue)
 {
-	struct jtag_command *cmd = jtag_command_queue;
+	struct jtag_command *cmd = cmd_queue;
 	int scan_size;
 	enum scan_type type;
 	uint8_t *buffer;
 
 	while (cmd) {
 		switch (cmd->type) {
-			case JTAG_RUNTEST:
-				LOG_DEBUG_IO("runtest %i cycles, end in %i", cmd->cmd.runtest->num_cycles,
-					cmd->cmd.runtest->end_state);
+		case JTAG_RUNTEST:
+			LOG_DEBUG_IO("runtest %u cycles, end in %i", cmd->cmd.runtest->num_cycles,
+				cmd->cmd.runtest->end_state);
 
-				if (cmd->cmd.runtest->end_state != -1)
-					opendous_end_state(cmd->cmd.runtest->end_state);
-				opendous_runtest(cmd->cmd.runtest->num_cycles);
-				break;
+			if (cmd->cmd.runtest->end_state != -1)
+				opendous_end_state(cmd->cmd.runtest->end_state);
+			opendous_runtest(cmd->cmd.runtest->num_cycles);
+			break;
 
-			case JTAG_TLR_RESET:
-				LOG_DEBUG_IO("statemove end in %i", cmd->cmd.statemove->end_state);
+		case JTAG_TLR_RESET:
+			LOG_DEBUG_IO("statemove end in %i", cmd->cmd.statemove->end_state);
 
-				if (cmd->cmd.statemove->end_state != -1)
-					opendous_end_state(cmd->cmd.statemove->end_state);
-				opendous_state_move();
-				break;
+			if (cmd->cmd.statemove->end_state != -1)
+				opendous_end_state(cmd->cmd.statemove->end_state);
+			opendous_state_move();
+			break;
 
-			case JTAG_PATHMOVE:
-				LOG_DEBUG_IO("pathmove: %i states, end in %i",
-					cmd->cmd.pathmove->num_states,
-					cmd->cmd.pathmove->path[cmd->cmd.pathmove->num_states - 1]);
+		case JTAG_PATHMOVE:
+			LOG_DEBUG_IO("pathmove: %u states, end in %i",
+				cmd->cmd.pathmove->num_states,
+				cmd->cmd.pathmove->path[cmd->cmd.pathmove->num_states - 1]);
 
-				opendous_path_move(cmd->cmd.pathmove->num_states, cmd->cmd.pathmove->path);
-				break;
+			opendous_path_move(cmd->cmd.pathmove->num_states, cmd->cmd.pathmove->path);
+			break;
 
-			case JTAG_SCAN:
-				LOG_DEBUG_IO("scan end in %i", cmd->cmd.scan->end_state);
+		case JTAG_SCAN:
+			LOG_DEBUG_IO("scan end in %i", cmd->cmd.scan->end_state);
 
-				if (cmd->cmd.scan->end_state != -1)
-					opendous_end_state(cmd->cmd.scan->end_state);
+			if (cmd->cmd.scan->end_state != -1)
+				opendous_end_state(cmd->cmd.scan->end_state);
 
-				scan_size = jtag_build_buffer(cmd->cmd.scan, &buffer);
-				LOG_DEBUG_IO("scan input, length = %d", scan_size);
+			scan_size = jtag_build_buffer(cmd->cmd.scan, &buffer);
+			LOG_DEBUG_IO("scan input, length = %d", scan_size);
 
-#ifdef _DEBUG_USB_COMMS_
-				opendous_debug_buffer(buffer, (scan_size + 7) / 8);
-#endif
-				type = jtag_scan_type(cmd->cmd.scan);
-				opendous_scan(cmd->cmd.scan->ir_scan, type, buffer, scan_size, cmd->cmd.scan);
-				break;
+			opendous_debug_buffer(buffer, (scan_size + 7) / 8);
 
-			case JTAG_RESET:
-				LOG_DEBUG_IO("reset trst: %i srst %i", cmd->cmd.reset->trst, cmd->cmd.reset->srst);
+			type = jtag_scan_type(cmd->cmd.scan);
+			opendous_scan(cmd->cmd.scan->ir_scan, type, buffer, scan_size, cmd->cmd.scan);
+			break;
 
-				opendous_tap_execute();
+		case JTAG_RESET:
+			LOG_DEBUG_IO("reset trst: %i srst %i", cmd->cmd.reset->trst, cmd->cmd.reset->srst);
 
-				if (cmd->cmd.reset->trst == 1)
-					tap_set_state(TAP_RESET);
-				opendous_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
-				break;
+			opendous_tap_execute();
 
-			case JTAG_SLEEP:
-				LOG_DEBUG_IO("sleep %" PRIu32, cmd->cmd.sleep->us);
-				opendous_tap_execute();
-				jtag_sleep(cmd->cmd.sleep->us);
-				break;
+			if (cmd->cmd.reset->trst == 1)
+				tap_set_state(TAP_RESET);
+			opendous_reset(cmd->cmd.reset->trst, cmd->cmd.reset->srst);
+			break;
 
-			default:
-				LOG_ERROR("BUG: unknown JTAG command type encountered");
-				exit(-1);
+		case JTAG_SLEEP:
+			LOG_DEBUG_IO("sleep %" PRIu32, cmd->cmd.sleep->us);
+			opendous_tap_execute();
+			jtag_sleep(cmd->cmd.sleep->us);
+			break;
+
+		default:
+			LOG_ERROR("BUG: unknown JTAG command type encountered");
+			exit(-1);
 		}
 		cmd = cmd->next;
 	}
@@ -347,7 +344,7 @@ static int opendous_init(void)
 
 	opendous_jtag_handle = opendous_usb_open();
 
-	if (opendous_jtag_handle == 0) {
+	if (!opendous_jtag_handle) {
 		LOG_ERROR("Cannot find opendous Interface! Please check connection and permissions.");
 		return ERROR_JTAG_INIT_FAILED;
 	}
@@ -393,7 +390,7 @@ static int opendous_quit(void)
 /***************************************************************************/
 /* Queue command implementations */
 
-void opendous_end_state(tap_state_t state)
+void opendous_end_state(enum tap_state state)
 {
 	if (tap_is_state_stable(state))
 		tap_set_end_state(state);
@@ -419,11 +416,9 @@ void opendous_state_move(void)
 	tap_set_state(tap_get_end_state());
 }
 
-void opendous_path_move(int num_states, tap_state_t *path)
+void opendous_path_move(unsigned int num_states, enum tap_state *path)
 {
-	int i;
-
-	for (i = 0; i < num_states; i++) {
+	for (unsigned int i = 0; i < num_states; i++) {
 		if (path[i] == tap_state_transition(tap_get_state(), false))
 			opendous_tap_append_step(0, 0);
 		else if (path[i] == tap_state_transition(tap_get_state(), true))
@@ -440,11 +435,9 @@ void opendous_path_move(int num_states, tap_state_t *path)
 	tap_set_end_state(tap_get_state());
 }
 
-void opendous_runtest(int num_cycles)
+void opendous_runtest(unsigned int num_cycles)
 {
-	int i;
-
-	tap_state_t saved_end_state = tap_get_end_state();
+	enum tap_state saved_end_state = tap_get_end_state();
 
 	/* only do a state_move when we're not already in IDLE */
 	if (tap_get_state() != TAP_IDLE) {
@@ -453,7 +446,7 @@ void opendous_runtest(int num_cycles)
 	}
 
 	/* execute num_cycles */
-	for (i = 0; i < num_cycles; i++)
+	for (unsigned int i = 0; i < num_cycles; i++)
 		opendous_tap_append_step(0, 0);
 
 	/* finish in end_state */
@@ -464,7 +457,7 @@ void opendous_runtest(int num_cycles)
 
 void opendous_scan(int ir_scan, enum scan_type type, uint8_t *buffer, int scan_size, struct scan_command *command)
 {
-	tap_state_t saved_end_state;
+	enum tap_state saved_end_state;
 
 	opendous_tap_ensure_space(1, scan_size + 8);
 
@@ -607,10 +600,7 @@ int opendous_tap_execute(void)
 	int byte_length;
 	int i, j;
 	int result;
-
-#ifdef _DEBUG_USB_COMMS_
 	int byte_length_out;
-#endif
 
 	if (tap_length > 0) {
 
@@ -618,10 +608,8 @@ int opendous_tap_execute(void)
 		/* LOG_INFO("OPENDOUS tap execute %d",tap_length); */
 		byte_length = (tap_length + 3) / 4;
 
-#ifdef _DEBUG_USB_COMMS_
 		byte_length_out = (tap_length + 7) / 8;
-		LOG_DEBUG("opendous is sending %d bytes", byte_length);
-#endif
+		LOG_DEBUG_USB("opendous is sending %d bytes", byte_length);
 
 		for (j = 0, i = 0; j <  byte_length;) {
 
@@ -650,10 +638,8 @@ int opendous_tap_execute(void)
 			j += transmit;
 		}
 
-#ifdef _DEBUG_USB_COMMS_
-		LOG_DEBUG("opendous tap result %d", byte_length_out);
+		LOG_DEBUG_USB("opendous tap result %d", byte_length_out);
 		opendous_debug_buffer(tdo_buffer, byte_length_out);
-#endif
 
 		/* LOG_INFO("eStick tap execute %d",tap_length); */
 		for (i = 0; i < pending_scan_results_length; i++) {
@@ -669,9 +655,7 @@ int opendous_tap_execute(void)
 
 			LOG_DEBUG_IO("pending scan result, length = %d", length);
 
-#ifdef _DEBUG_USB_COMMS_
 			opendous_debug_buffer(buffer, byte_length_out);
-#endif
 
 			if (jtag_read_buffer(buffer, command) != ERROR_OK) {
 				opendous_tap_init();
@@ -695,7 +679,7 @@ struct opendous_jtag *opendous_usb_open(void)
 	struct opendous_jtag *result;
 
 	struct libusb_device_handle *devh;
-	if (jtag_libusb_open(opendous_probe->VID, opendous_probe->PID, &devh, NULL) != ERROR_OK)
+	if (jtag_libusb_open(opendous_probe->VID, opendous_probe->PID, NULL, &devh, NULL) != ERROR_OK)
 		return NULL;
 
 	jtag_libusb_set_configuration(devh, 0);
@@ -735,74 +719,80 @@ int opendous_usb_message(struct opendous_jtag *opendous_jtag, int out_length, in
 /* Write data from out_buffer to USB. */
 int opendous_usb_write(struct opendous_jtag *opendous_jtag, int out_length)
 {
-	int result;
+	int result, transferred;
 
 	if (out_length > OPENDOUS_OUT_BUFFER_SIZE) {
 		LOG_ERROR("opendous_jtag_write illegal out_length=%d (max=%d)", out_length, OPENDOUS_OUT_BUFFER_SIZE);
 		return -1;
 	}
 
-#ifdef _DEBUG_USB_COMMS_
-	LOG_DEBUG("USB write begin");
-#endif
+	LOG_DEBUG_USB("USB write begin");
+
 	if (opendous_probe->CONTROL_TRANSFER) {
 		result = jtag_libusb_control_transfer(opendous_jtag->usb_handle,
 			LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_OUT,
-			FUNC_WRITE_DATA, 0, 0, (char *) usb_out_buffer, out_length, OPENDOUS_USB_TIMEOUT);
+			FUNC_WRITE_DATA, 0, 0, (char *)usb_out_buffer, out_length, OPENDOUS_USB_TIMEOUT,
+			&transferred);
+		/* FIXME: propagate error separately from transferred */
+		if (result == ERROR_OK)
+			result = transferred;
 	} else {
 		jtag_libusb_bulk_write(opendous_jtag->usb_handle, OPENDOUS_WRITE_ENDPOINT,
 			(char *)usb_out_buffer, out_length, OPENDOUS_USB_TIMEOUT, &result);
 	}
-#ifdef _DEBUG_USB_COMMS_
-	LOG_DEBUG("USB write end: %d bytes", result);
-#endif
+
+	LOG_DEBUG_USB("USB write end: %d bytes", result);
 
 	LOG_DEBUG_IO("opendous_usb_write, out_length = %d, result = %d", out_length, result);
 
-#ifdef _DEBUG_USB_COMMS_
 	opendous_debug_buffer(usb_out_buffer, out_length);
-#endif
+
 	return result;
 }
 
 /* Read data from USB into in_buffer. */
 int opendous_usb_read(struct opendous_jtag *opendous_jtag)
 {
-#ifdef _DEBUG_USB_COMMS_
-	LOG_DEBUG("USB read begin");
-#endif
+	int transferred;
+
+	LOG_DEBUG_USB("USB read begin");
+
 	int result;
 	if (opendous_probe->CONTROL_TRANSFER) {
 		result = jtag_libusb_control_transfer(opendous_jtag->usb_handle,
 			LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE | LIBUSB_ENDPOINT_IN,
-			FUNC_READ_DATA, 0, 0, (char *) usb_in_buffer, OPENDOUS_IN_BUFFER_SIZE, OPENDOUS_USB_TIMEOUT);
+			FUNC_READ_DATA, 0, 0, (char *)usb_in_buffer, OPENDOUS_IN_BUFFER_SIZE, OPENDOUS_USB_TIMEOUT,
+			&transferred);
+		/* FIXME: propagate error separately from transferred */
+		if (result == ERROR_OK)
+			result = transferred;
 	} else {
 		jtag_libusb_bulk_read(opendous_jtag->usb_handle, OPENDOUS_READ_ENDPOINT,
 			(char *)usb_in_buffer, OPENDOUS_IN_BUFFER_SIZE, OPENDOUS_USB_TIMEOUT, &result);
 	}
-#ifdef _DEBUG_USB_COMMS_
-	LOG_DEBUG("USB read end: %d bytes", result);
-#endif
+
+	LOG_DEBUG_USB("USB read end: %d bytes", result);
+
 	LOG_DEBUG_IO("opendous_usb_read, result = %d", result);
 
-#ifdef _DEBUG_USB_COMMS_
 	opendous_debug_buffer(usb_in_buffer, result);
-#endif
+
 	return result;
 }
 
-#ifdef _DEBUG_USB_COMMS_
 #define BYTES_PER_LINE  16
 
 void opendous_debug_buffer(uint8_t *buffer, int length)
 {
+	if (!LOG_LEVEL_IS(LOG_LVL_DEBUG_USB))
+		return;
+
 	char line[8 + 3 * BYTES_PER_LINE + 1];
 
 	for (int i = 0; i < length; i += BYTES_PER_LINE) {
 		int n = snprintf(line, 9, "%04x", i);
 		for (int j = i; j < i + BYTES_PER_LINE && j < length; j++)
 			n += snprintf(line + n, 4, " %02x", buffer[j]);
-		LOG_DEBUG("%s", line);
+		LOG_DEBUG_USB("%s", line);
 	}
 }
-#endif
