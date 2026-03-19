@@ -12,7 +12,7 @@ OBJDUMP=$(CROSS_COMPILE)objdump
 AFLAGS = -static -nostartfiles -mlittle-endian -Wa,-EL
 CFLAGS = -c -mthumb -nostdlib -nostartfiles -Os -g -fPIC
 
-all: n32.inc
+all: n32g03x.inc n32g45x.inc
 
 .PHONY: clean
 
