@@ -89,7 +89,6 @@
 #define JTAG_MODE_ALT (LSB_FIRST | NEG_EDGE_IN | NEG_EDGE_OUT)
 #define SWD_MODE (LSB_FIRST | POS_EDGE_IN | NEG_EDGE_OUT)
 
-static char *ftdi_device_desc;
 static uint8_t ftdi_channel;
 static uint8_t ftdi_jtag_mode = JTAG_MODE;
 
@@ -127,11 +126,6 @@ static bool oscan1_mode;
 */
 static bool jscan3_mode;
 #endif
-
-#define MAX_USB_IDS 8
-/* vid = pid = 0 marks the end of the list */
-static uint16_t ftdi_vid[MAX_USB_IDS + 1] = { 0 };
-static uint16_t ftdi_pid[MAX_USB_IDS + 1] = { 0 };
 
 static struct mpsse_ctx *mpsse_ctx;
 
@@ -734,13 +728,14 @@ static int ftdi_initialize(void)
 	else
 		LOG_DEBUG("ftdi interface using shortest path jtag state transitions");
 
-	if (!ftdi_vid[0] && !ftdi_pid[0]) {
-		LOG_ERROR("Please specify ftdi vid_pid");
+	if (!adapter_usb_get_vids()[0] && !adapter_usb_get_pids()[0]) {
+		LOG_ERROR("Please specify 'adapter usb vid_pid'");
 		return ERROR_JTAG_INIT_FAILED;
 	}
 
-	mpsse_ctx = mpsse_open(ftdi_vid, ftdi_pid, ftdi_device_desc,
-				adapter_get_required_serial(), adapter_usb_get_location(), ftdi_channel);
+	mpsse_ctx = mpsse_open(adapter_usb_get_vids(), adapter_usb_get_pids(),
+		adapter_usb_get_product_name(), adapter_get_required_serial(),
+		adapter_usb_get_location(), ftdi_channel);
 	if (!mpsse_ctx)
 		return ERROR_JTAG_INIT_FAILED;
 
@@ -794,8 +789,6 @@ static int ftdi_quit(void)
 		free(sig);
 		sig = next;
 	}
-
-	free(ftdi_device_desc);
 
 	free(swd_cmd_queue);
 
@@ -1082,18 +1075,6 @@ static void cjtag_reset_online_activate(void)
 }
 #endif /* #if BUILD_FTDI_CJTAG == 1 */
 
-COMMAND_HANDLER(ftdi_handle_device_desc_command)
-{
-	if (CMD_ARGC == 1) {
-		free(ftdi_device_desc);
-		ftdi_device_desc = strdup(CMD_ARGV[0]);
-	} else {
-		LOG_ERROR("expected exactly one argument to ftdi device_desc <description>");
-	}
-
-	return ERROR_OK;
-}
-
 COMMAND_HANDLER(ftdi_handle_channel_command)
 {
 	if (CMD_ARGC == 1)
@@ -1240,36 +1221,6 @@ COMMAND_HANDLER(ftdi_handle_get_signal_command)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(ftdi_handle_vid_pid_command)
-{
-	if (CMD_ARGC > MAX_USB_IDS * 2) {
-		LOG_WARNING("ignoring extra IDs in ftdi vid_pid "
-			"(maximum is %d pairs)", MAX_USB_IDS);
-		CMD_ARGC = MAX_USB_IDS * 2;
-	}
-	if (CMD_ARGC < 2 || (CMD_ARGC & 1)) {
-		LOG_WARNING("incomplete ftdi vid_pid configuration directive");
-		if (CMD_ARGC < 2)
-			return ERROR_COMMAND_SYNTAX_ERROR;
-		/* remove the incomplete trailing id */
-		CMD_ARGC -= 1;
-	}
-
-	unsigned int i;
-	for (i = 0; i < CMD_ARGC; i += 2) {
-		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[i], ftdi_vid[i >> 1]);
-		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[i + 1], ftdi_pid[i >> 1]);
-	}
-
-	/*
-	 * Explicitly terminate, in case there are multiples instances of
-	 * ftdi vid_pid.
-	 */
-	ftdi_vid[i >> 1] = ftdi_pid[i >> 1] = 0;
-
-	return ERROR_OK;
-}
-
 COMMAND_HANDLER(ftdi_handle_tdo_sample_edge_command)
 {
 	const struct nvp *n;
@@ -1321,13 +1272,6 @@ COMMAND_HANDLER(ftdi_handle_jscan3_mode_command)
 
 static const struct command_registration ftdi_subcommand_handlers[] = {
 	{
-		.name = "device_desc",
-		.handler = &ftdi_handle_device_desc_command,
-		.mode = COMMAND_CONFIG,
-		.help = "set the USB device description of the FTDI device",
-		.usage = "description_string",
-	},
-	{
 		.name = "channel",
 		.handler = &ftdi_handle_channel_command,
 		.mode = COMMAND_CONFIG,
@@ -1363,13 +1307,6 @@ static const struct command_registration ftdi_subcommand_handlers[] = {
 		.mode = COMMAND_EXEC,
 		.help = "read the value of a layout-specific signal",
 		.usage = "name",
-	},
-	{
-		.name = "vid_pid",
-		.handler = &ftdi_handle_vid_pid_command,
-		.mode = COMMAND_CONFIG,
-		.help = "the vendor ID and product ID of the FTDI device",
-		.usage = "(vid pid)*",
 	},
 	{
 		.name = "tdo_sample_edge",
@@ -1599,16 +1536,20 @@ static void ftdi_swd_queue_cmd(uint8_t cmd, uint32_t *dst, uint32_t data, uint32
 
 }
 
-static void ftdi_swd_read_reg(uint8_t cmd, uint32_t *value, uint32_t ap_delay_clk)
+static int ftdi_swd_read_reg(uint8_t cmd, uint32_t *value, uint32_t ap_delay_clk)
 {
 	assert(cmd & SWD_CMD_RNW);
 	ftdi_swd_queue_cmd(cmd, value, 0, ap_delay_clk);
+
+	return ERROR_OK;	/* TODO: return error instead of queuing it */
 }
 
-static void ftdi_swd_write_reg(uint8_t cmd, uint32_t value, uint32_t ap_delay_clk)
+static int ftdi_swd_write_reg(uint8_t cmd, uint32_t value, uint32_t ap_delay_clk)
 {
 	assert(!(cmd & SWD_CMD_RNW));
 	ftdi_swd_queue_cmd(cmd, NULL, value, ap_delay_clk);
+
+	return ERROR_OK;	/* TODO: return error instead of queuing it */
 }
 
 static int ftdi_swd_switch_seq(enum swd_special_seq seq)

@@ -48,6 +48,8 @@ AC_TYPE_LONG_LONG_INT
 AC_SEARCH_LIBS([ioperm], [ioperm])
 AC_SEARCH_LIBS([dlopen], [dl])
 AC_SEARCH_LIBS([openpty], [util])
+# Older versions of Linux put clock_gettime in librt
+AC_SEARCH_LIBS([clock_gettime], [rt])
 
 AC_CHECK_HEADERS([sys/socket.h])
 AC_CHECK_HEADERS([elf.h])
@@ -93,7 +95,7 @@ AC_C_BIGENDIAN
 
 AC_CHECK_FUNCS([strndup])
 AC_CHECK_FUNCS([strnlen])
-AC_CHECK_FUNCS([gettimeofday])
+AC_CHECK_FUNCS([clock_gettime])
 AC_CHECK_FUNCS([usleep])
 AC_CHECK_FUNCS([realpath])
 AC_CHECK_FUNCS([mallinfo])
@@ -128,6 +130,7 @@ m4_define([USB1_ADAPTERS],
 	[[[ftdi], [MPSSE mode of FTDI based devices], [FTDI]],
 	[[ftdi_cjtag], [cJTAG (OScan1, JScan3) tunneled thru MPSSE], [FTDI_CJTAG]],
 	[[ch347], [CH347 based devices], [CH347]],
+	[[cklink], [T-Head CK-Link JTAG Probe], [CKLINK]],
 	[[stlink], [ST-Link Programmer], [HLADAPTER_STLINK]],
 	[[ti_icdi], [TI ICDI JTAG Programmer], [HLADAPTER_ICDI]],
 	[[ulink], [Keil ULINK JTAG Programmer], [ULINK]],
@@ -142,6 +145,7 @@ m4_define([USB1_ADAPTERS],
 	[[rlink], [Raisonance RLink JTAG Programmer], [RLINK]],
 	[[usbprog], [USBProg JTAG Programmer], [USBPROG]],
 	[[esp_usb_jtag], [Espressif JTAG Programmer], [ESP_USB_JTAG]],
+	[[eud], [Qualcomm Embedded USB Debugger], [EUD]],
 	[[cmsis_dap_v2], [CMSIS-DAP v2 compliant dongle (USB bulk)], [CMSIS_DAP_USB]]])
 
 # Please keep cmsis_dap_v2 the last in USB1_ADAPTERS
@@ -184,6 +188,9 @@ m4_define([SERIAL_PORT_ADAPTERS],
 
 m4_define([PARALLEL_PORT_ADAPTER],
 	[[[parport], [PC Parallel Port], [PARPORT]]])
+
+m4_define([NETWORK_ADAPTERS],
+	[[[xvc], [Xilinx XVC TCP], [XVC]]])
 
 m4_define([LINUXSPIDEV_ADAPTER],
 	[[[linuxspidev], [Linux spidev driver], [LINUXSPIDEV]]])
@@ -296,7 +303,8 @@ AC_ARG_ADAPTERS([
   RSHIM_ADAPTER,
   XVC_ADAPTERS,
   LIBJAYLINK_ADAPTERS,
-  CMSIS_DAP_TCP_ADAPTER
+  CMSIS_DAP_TCP_ADAPTER,
+  NETWORK_ADAPTERS
   ],[auto])
 
 AC_ARG_ADAPTERS([
@@ -474,6 +482,8 @@ AS_IF([test "x$build_gw16012" = "xyes"], [
   AC_DEFINE([BUILD_GW16012], [0], [0 if you don't want the Gateworks GW16012 driver.])
 ])
 
+jimtcl_gcc_warnings=""
+
 AS_IF([test "x$use_internal_jimtcl" = "xyes"], [
   AS_IF([test -f "$srcdir/jimtcl/configure"], [
     AS_IF([test "x$use_internal_jimtcl_maintainer" = "xyes"], [
@@ -482,16 +492,32 @@ AS_IF([test "x$use_internal_jimtcl" = "xyes"], [
       jimtcl_config_options="--disable-install-jim --with-ext=json --minimal --disable-ssl"
     ])
     AX_CONFIG_SUBDIR_OPTION([jimtcl], [$jimtcl_config_options])
+
+    # For jimtcl 0.84 repeated declaration bug
+    AS_IF([test $(grep --count "^JIM_EXPORT int Jim_CreateCommand" $srcdir/jimtcl/jim.h) = 2], [
+      jimtcl_gcc_warnings="$jimtcl_gcc_warnings -Wno-redundant-decls"
+    ])
   ], [
     AC_MSG_ERROR([jimtcl not found, run git submodule init and git submodule update.])
   ])
 ], [
   PKG_CHECK_MODULES([JIMTCL], [jimtcl >= 0.79], [
       have_jimtcl_pkg_config=yes
+
+      # For jimtcl 0.84 repeated declaration bug
+      PKG_CHECK_EXISTS([jimtcl = 0.84], [
+        jimtcl_gcc_warnings="$jimtcl_gcc_warnings -Wno-redundant-decls"
+      ])
     ], [
       have_jimtcl_pkg_config=no
       AC_CHECK_HEADER([jim.h], [], [
         AC_MSG_ERROR([jimtcl is required but not found via pkg-config and system includes])
+      ])
+
+      # For jimtcl 0.84 repeated declaration bug
+      path_jim_h=$(echo '#include <jim.h>' | gcc -E -H - 2>&1 | sed -n '/^\. .*jim\.h/{s/.* //;p}')
+      AS_IF([test $(grep --count "^JIM_EXPORT int Jim_CreateCommand" $path_jim_h) = 2], [
+        jimtcl_gcc_warnings="$jimtcl_gcc_warnings -Wno-redundant-decls"
       ])
   ])
 ])
@@ -525,10 +551,6 @@ AS_IF([test "x$enable_capstone" != xno], [
 		fi
 		enable_capstone=no
 	])
-])
-
-AS_IF([test "x$enable_capstone" == xno], [
-	AC_DEFINE([HAVE_CAPSTONE], [0], [0 if you don't have Capstone disassembly framework.])
 ])
 
 for hidapi_lib in hidapi hidapi-hidraw hidapi-libusb; do
@@ -620,6 +642,11 @@ PROCESS_ADAPTERS([AMTJTAGACCEL_ADAPTER], [true], [unused])
 PROCESS_ADAPTERS([HOST_ARM_BITBANG_ADAPTERS], ["x$ac_cv_header_sys_mman_h" = "xyes"], [header sys/mman.h])
 PROCESS_ADAPTERS([HOST_ARM_OR_AARCH64_BITBANG_ADAPTERS], ["x$ac_cv_header_sys_mman_h" = "xyes"], [header sys/mman.h])
 PROCESS_ADAPTERS([DUMMY_ADAPTER], [true], [unused])
+PROCESS_ADAPTERS([NETWORK_ADAPTERS], [true], [unused])
+
+AS_IF([test "x$enable_xvc" != "xno"], [
+  build_bitbang=yes
+])
 
 AS_IF([test "x$enable_linuxgpiod" != "xno"], [
   build_bitbang=yes
@@ -754,6 +781,8 @@ AS_IF([test "x${gcc_wextra}" = "xyes"], [
   GCC_WARNINGS="${GCC_WARNINGS} -Wredundant-decls"
   GCC_WARNINGS="${GCC_WARNINGS} -Wpointer-arith"
   GCC_WARNINGS="${GCC_WARNINGS} -Wundef"
+  GCC_WARNINGS="${GCC_WARNINGS} -Wsign-compare"
+  GCC_WARNINGS="${GCC_WARNINGS} $jimtcl_gcc_warnings"
 ])
 AS_IF([test "x${gcc_werror}" = "xyes"], [
   GCC_WARNINGS="${GCC_WARNINGS} -Werror"
@@ -814,6 +843,7 @@ m4_foreach([adapter_driver], [USB1_ADAPTERS,
 	LIBJAYLINK_ADAPTERS, XVC_ADAPTERS,
 	SERIAL_PORT_ADAPTERS,
 	PARALLEL_PORT_ADAPTER,
+	NETWORK_ADAPTERS,
 	LINUXSPIDEV_ADAPTER,
 	VDEBUG_ADAPTER,
 	JTAG_DPI_ADAPTER,

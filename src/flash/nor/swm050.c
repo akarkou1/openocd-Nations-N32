@@ -67,8 +67,7 @@ static int swm050_write(struct flash_bank *bank, const uint8_t *buffer, uint32_t
 
 	if (target->state != TARGET_HALTED) {
 		LOG_ERROR("Target not halted");
-		retval = ERROR_TARGET_NOT_HALTED;
-		return retval;
+		return ERROR_TARGET_NOT_HALTED;
 	}
 
 	/* Perform write */
@@ -145,7 +144,6 @@ COMMAND_HANDLER(swm050_handle_mass_erase_command)
 
 FLASH_BANK_COMMAND_HANDLER(swm050_flash_bank_command)
 {
-	free(bank->sectors);
 	bank->write_start_alignment = 4;
 	bank->write_end_alignment = 4;
 	bank->size = SWM050_FLASH_PAGE_SIZE * SWM050_FLASH_PAGES;

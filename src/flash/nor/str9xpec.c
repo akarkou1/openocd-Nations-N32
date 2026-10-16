@@ -171,7 +171,6 @@ static int str9xpec_isc_disable(struct flash_bank *bank)
 static int str9xpec_read_config(struct flash_bank *bank)
 {
 	struct scan_field field;
-	uint8_t status;
 	struct jtag_tap *tap;
 
 	struct str9xpec_flash_controller *str9xpec_info = bank->driver_priv;
@@ -190,9 +189,7 @@ static int str9xpec_read_config(struct flash_bank *bank)
 	jtag_add_dr_scan(tap, 1, &field, TAP_IDLE);
 	jtag_execute_queue();
 
-	status = str9xpec_isc_status(tap);
-
-	return status;
+	return str9xpec_isc_status(tap);
 }
 
 static int str9xpec_build_block_list(struct flash_bank *bank)
@@ -227,7 +224,7 @@ static int str9xpec_build_block_list(struct flash_bank *bank)
 		break;
 	default:
 		LOG_ERROR("BUG: unknown bank->size encountered");
-		exit(-1);
+		return ERROR_FAIL;
 	}
 
 	num_sectors = b0_sectors + b1_sectors;
@@ -285,7 +282,12 @@ FLASH_BANK_COMMAND_HANDLER(str9xpec_flash_bank_command)
 	str9xpec_info->tap = jtag_tap_by_position(jtag_info->tap->abs_chain_position - 1);
 	str9xpec_info->isc_enable = 0;
 
-	str9xpec_build_block_list(bank);
+	int retval = str9xpec_build_block_list(bank);
+	if (retval != ERROR_OK) {
+		free(bank->driver_priv);
+		bank->driver_priv = NULL;
+		return retval;
+	}
 
 	/* clear option byte register */
 	buf_set_u32(str9xpec_info->options, 0, 64, 0);
@@ -487,11 +489,7 @@ static int str9xpec_lock_device(struct flash_bank *bank)
 
 static int str9xpec_unlock_device(struct flash_bank *bank)
 {
-	uint8_t status;
-
-	status = str9xpec_erase_area(bank, 0, 255);
-
-	return status;
+	return str9xpec_erase_area(bank, 0, 255);
 }
 
 static int str9xpec_protect(struct flash_bank *bank, int set,

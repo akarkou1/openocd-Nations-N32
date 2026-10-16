@@ -57,7 +57,8 @@ static int gatemate_read_cfg_line(struct gatemate_bit_file *bit_file, const char
 		} else if (line_buffer[idx] == 0) {
 			break;
 		} else if (idx + 1 < nread) {
-			if (isxdigit(line_buffer[idx]) && isxdigit(line_buffer[idx + 1])) {
+			if (isxdigit((unsigned char)line_buffer[idx]) &&
+					isxdigit((unsigned char)line_buffer[idx + 1])) {
 				uint8_t byte;
 				unhexify(&byte, line_buffer + idx, 2);
 				int retval = gatemate_add_byte_to_bitfile(bit_file, byte);
@@ -138,10 +139,10 @@ static int gatemate_read_cfg_file(struct gatemate_bit_file *bit_file, const char
 
 static int gatemate_read_file(struct gatemate_bit_file *bit_file, const char *filename)
 {
-	memset(bit_file, 0, sizeof(struct gatemate_bit_file));
-
 	if (!filename || !bit_file)
 		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	memset(bit_file, 0, sizeof(struct gatemate_bit_file));
 
 	/* check if binary .bit or ascii .cfg */
 	const char *file_suffix_pos = strrchr(filename, '.');
@@ -276,7 +277,10 @@ PLD_CREATE_COMMAND_HANDLER(gatemate_pld_create_command)
 	if (CMD_ARGC != 4)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	if (strcmp(CMD_ARGV[2], "-chain-position") != 0)
+	if (!strcmp(CMD_ARGV[2], "-chain-position"))
+		LOG_WARNING("[%s] DEPRECATED! '-chain-position' will be removed in the future, use '-tap' instead",
+			CMD_ARGV[0]);
+	else if (strcmp(CMD_ARGV[2], "-tap") != 0)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
 	struct jtag_tap *tap = jtag_tap_by_string(CMD_ARGV[3]);
