@@ -63,6 +63,7 @@
 #endif
 
 /* project specific includes */
+#include <jtag/adapter.h>
 #include <jtag/interface.h>
 #include <jtag/commands.h>
 #include <helper/time_support.h>
@@ -736,6 +737,15 @@ static int ublast_scan(struct scan_command *cmd)
 static void ublast_usleep(int us)
 {
 	LOG_DEBUG_IO("%s(us=%d)",  __func__, us);
+	/*
+	 * A JTAG_SLEEP is meant to keep the TAP in its current stable state
+	 * for the given amount of time (e.g. SVF "RUNTEST ... SEC" flash
+	 * programming pulses). Flush the queued bit-bang bytes first,
+	 * otherwise the sleep would happen before the queued TCK cycles and
+	 * state moves are actually driven on the pins, and the required
+	 * dwell time in the stable state would be lost.
+	 */
+	ublast_flush_buffer();
 	jtag_sleep(us);
 }
 
@@ -825,9 +835,9 @@ static int ublast_execute_queue(struct jtag_command *cmd_queue)
  */
 static int ublast_init(void)
 {
-	int ret, i;
+	int ret;
 
-	for (i = 0; lowlevel_drivers_map[i].name; i++) {
+	for (unsigned int i = 0; lowlevel_drivers_map[i].name; i++) {
 		if (info.lowlevel_name) {
 			if (!strcmp(lowlevel_drivers_map[i].name, info.lowlevel_name)) {
 				info.drv = lowlevel_drivers_map[i].drv_register();
@@ -852,6 +862,24 @@ static int ublast_init(void)
 		LOG_ERROR("No lowlevel driver available");
 		return ERROR_JTAG_DEVICE_ERROR;
 	}
+
+	unsigned int num_vid_pid_pairs = 0;
+
+	for (unsigned int i = 0; adapter_usb_get_vids()[i]; i++)
+		num_vid_pid_pairs++;
+
+	if (num_vid_pid_pairs > 0) {
+		info.ublast_vid = adapter_usb_get_vids()[0];
+		info.ublast_pid = adapter_usb_get_pids()[0];
+	}
+
+	if (num_vid_pid_pairs > 1) {
+		info.ublast_vid_uninit = adapter_usb_get_vids()[1];
+		info.ublast_pid_uninit = adapter_usb_get_pids()[1];
+	}
+
+	if (num_vid_pid_pairs > 2)
+		LOG_WARNING("ignoring extra IDs in adapter usb vid_pid (maximum is 2 pairs)");
 
 	/*
 	 * Register the lowlevel driver
@@ -891,31 +919,6 @@ static int ublast_quit(void)
 
 	ublast_buf_write(&byte0, 1, &retlen);
 	return info.drv->close(info.drv);
-}
-
-COMMAND_HANDLER(ublast_handle_vid_pid_command)
-{
-	if (CMD_ARGC > 4) {
-		LOG_WARNING("ignoring extra IDs in ublast_vid_pid "
-					"(maximum is 2 pairs)");
-		CMD_ARGC = 4;
-	}
-
-	if (CMD_ARGC >= 2) {
-		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[0], info.ublast_vid);
-		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[1], info.ublast_pid);
-	} else {
-		LOG_WARNING("incomplete ublast_vid_pid configuration");
-	}
-
-	if (CMD_ARGC == 4) {
-		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[2], info.ublast_vid_uninit);
-		COMMAND_PARSE_NUMBER(u16, CMD_ARGV[3], info.ublast_pid_uninit);
-	} else {
-		LOG_WARNING("incomplete ublast_vid_pid configuration");
-	}
-
-	return ERROR_OK;
 }
 
 COMMAND_HANDLER(ublast_handle_pin_command)
@@ -1006,15 +1009,6 @@ COMMAND_HANDLER(ublast_firmware_command)
 
 
 static const struct command_registration ublast_subcommand_handlers[] = {
-	{
-		.name = "vid_pid",
-		.handler = ublast_handle_vid_pid_command,
-		.mode = COMMAND_CONFIG,
-		.help = "the vendor ID and product ID of the USB-Blaster and "
-			"vendor ID and product ID of the uninitialized device "
-			"for USB-Blaster II",
-		.usage = "vid pid vid_uninit pid_uninit",
-	},
 	{
 		.name = "lowlevel_driver",
 		.handler = ublast_handle_lowlevel_drv_command,

@@ -64,7 +64,7 @@ proc ocd_process_reset_inner { MODE } {
 
 	# Examine all targets on enabled taps.
 	foreach t $targets {
-		if {![using_jtag] || [jtag tapisenabled [$t cget -chain-position]]} {
+		if {![using_jtag] || [jtag tapisenabled [$t cget -tap]]} {
 			$t invoke-event examine-start
 			set err [catch "$t arp_examine allow-defer"]
 			if { $err } {
@@ -82,7 +82,7 @@ proc ocd_process_reset_inner { MODE } {
 	}
 	foreach t $targets {
 		# C code needs to know if we expect to 'halt'
-		if {![using_jtag] || [jtag tapisenabled [$t cget -chain-position]]} {
+		if {![using_jtag] || [jtag tapisenabled [$t cget -tap]]} {
 			$t arp_reset assert $halt
 		}
 	}
@@ -97,7 +97,7 @@ proc ocd_process_reset_inner { MODE } {
 	}
 	foreach t $targets {
 		# Again, de-assert code needs to know if we 'halt'
-		if {![using_jtag] || [jtag tapisenabled [$t cget -chain-position]]} {
+		if {![using_jtag] || [jtag tapisenabled [$t cget -tap]]} {
 			$t arp_reset deassert $halt
 		}
 	}
@@ -110,7 +110,7 @@ proc ocd_process_reset_inner { MODE } {
 	# first executing any instructions.
 	if { $halt } {
 		foreach t $targets {
-			if {[using_jtag] && ![jtag tapisenabled [$t cget -chain-position]]} {
+			if {[using_jtag] && ![jtag tapisenabled [$t cget -tap]]} {
 				continue
 			}
 
@@ -151,7 +151,7 @@ proc ocd_process_reset_inner { MODE } {
 	#Pass 2 - if needed "init"
 	if { $MODE == "init" } {
 		foreach t $targets {
-			if {[using_jtag] && ![jtag tapisenabled [$t cget -chain-position]]} {
+			if {[using_jtag] && ![jtag tapisenabled [$t cget -tap]]} {
 				continue
 			}
 
@@ -293,6 +293,18 @@ lappend _telnet_autocomplete_skip "mips_m4k smp_off"
 proc "mips_m4k smp_off" {args} {
 	echo "DEPRECATED! use 'mips_m4k smp off' not 'mips_m4k smp_off'"
 	eval mips_m4k smp off $args
+}
+
+lappend _telnet_autocomplete_skip "arm disassemble"
+proc "arm disassemble" {args} {
+	echo "DEPRECATED! use 'disassemble $args'"
+	eval disassemble $args
+}
+
+lappend _telnet_autocomplete_skip "aarch64 disassemble"
+proc "aarch64 disassemble" {args} {
+	echo "DEPRECATED! use 'disassemble $args' not 'aarch64 disassemble $args'"
+	eval disassemble $args
 }
 
 lappend _telnet_autocomplete_skip _post_init_target_cortex_a_cache_auto

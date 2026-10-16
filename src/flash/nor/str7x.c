@@ -145,7 +145,7 @@ static int str7x_build_block_list(struct flash_bank *bank)
 		break;
 	default:
 		LOG_ERROR("BUG: unknown bank->size encountered");
-		exit(-1);
+		return ERROR_FAIL;
 	}
 
 	num_sectors = b0_sectors + b1_sectors;
@@ -197,9 +197,10 @@ FLASH_BANK_COMMAND_HANDLER(str7x_flash_bank_command)
 	str7x_info->busy_bits = (FLASH_LOCK | FLASH_BSYA1 | FLASH_BSYA0);
 	str7x_info->disable_bit = (1 << 1);
 
-	if (strcmp(CMD_ARGV[6], "STR71x") == 0)
+	int retval = ERROR_OK;
+	if (strcmp(CMD_ARGV[6], "STR71x") == 0) {
 		str7x_info->register_base = 0x40100000;
-	else if (strcmp(CMD_ARGV[6], "STR73x") == 0) {
+	} else if (strcmp(CMD_ARGV[6], "STR73x") == 0) {
 		str7x_info->register_base = 0x80100000;
 		str7x_info->busy_bits = (FLASH_LOCK | FLASH_BSYA0);
 	} else if (strcmp(CMD_ARGV[6], "STR75x") == 0) {
@@ -207,13 +208,17 @@ FLASH_BANK_COMMAND_HANDLER(str7x_flash_bank_command)
 		str7x_info->disable_bit = (1 << 0);
 	} else {
 		LOG_ERROR("unknown STR7x variant: '%s'", CMD_ARGV[6]);
-		free(str7x_info);
-		return ERROR_FLASH_BANK_INVALID;
+		retval = ERROR_FLASH_BANK_INVALID;
 	}
 
-	str7x_build_block_list(bank);
+	if (retval == ERROR_OK)
+		retval = str7x_build_block_list(bank);
 
-	return ERROR_OK;
+	if (retval != ERROR_OK) {
+		free(bank->driver_priv);
+		bank->driver_priv = NULL;
+	}
+	return retval;
 }
 
 /* wait for flash to become idle or report errors.
@@ -736,7 +741,7 @@ COMMAND_HANDLER(str7x_handle_disable_jtag_command)
 	target_read_u32(target, str7x_get_flash_adr(bank, FLASH_NVAPR1), &reg);
 	protection_regs = ~(reg >> 16);
 
-	while (((protection_regs) != 0) && (protection_level < 16)) {
+	while ((protection_regs != 0) && (protection_level < 16)) {
 		protection_regs >>= 1;
 		protection_level++;
 	}
@@ -753,7 +758,7 @@ COMMAND_HANDLER(str7x_handle_disable_jtag_command)
 		target_write_u32(target, str7x_get_flash_adr(bank, FLASH_CR0), flash_cmd);
 		target_write_u32(target, str7x_get_flash_adr(bank, FLASH_AR), 0x4010DFBC);
 		target_write_u32(target, str7x_get_flash_adr(bank, FLASH_DR0),
-				~(1 << (15 + protection_level)));
+				~(1U << (15 + protection_level)));
 		flash_cmd = FLASH_SPR | FLASH_WMS;
 		target_write_u32(target, str7x_get_flash_adr(bank, FLASH_CR0), flash_cmd);
 	}

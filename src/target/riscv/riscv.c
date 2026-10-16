@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <assert.h>
 #include <stdlib.h>
 #include <time.h>
 
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
 
 #include <helper/log.h>
 #include <helper/time_support.h>
@@ -477,7 +478,7 @@ static struct target_type *get_target_type(struct target *target)
 
 static struct riscv_private_config *alloc_default_riscv_private_config(void)
 {
-	struct riscv_private_config * const config = malloc(sizeof(*config));
+	struct riscv_private_config * const config = calloc(1, sizeof(*config));
 	if (!config) {
 		LOG_ERROR("Out of memory!");
 		return NULL;
@@ -523,6 +524,12 @@ static struct jim_nvp nvp_ebreak_mode_opts[] = {
 	{ .name = "exception", .value = false },
 	{ .name = "halt", .value = true },
 	{ .name = NULL, .value = RISCV_EBREAK_MODE_INVALID }
+};
+
+static struct jim_nvp nvp_on_off_opts[] = {
+	{ .name = "off", .value = false },
+	{ .name = "on", .value = true },
+	{ .name = NULL, .value = -1 }
 };
 
 static int jim_configure_ebreak(struct riscv_private_config *config, struct jim_getopt_info *goi)
@@ -613,11 +620,13 @@ static int jim_report_ebreak_config(const struct riscv_private_config *config,
 
 enum riscv_cfg_opts {
 	RISCV_CFG_EBREAK,
+	RISCV_CFG_CETRIG,
 	RISCV_CFG_INVALID = -1
 };
 
 static struct jim_nvp nvp_config_opts[] = {
 	{ .name = "-ebreak", .value = RISCV_CFG_EBREAK },
+	{ .name = "-cetrig", .value = RISCV_CFG_CETRIG },
 	{ .name = NULL, .value = RISCV_CFG_INVALID }
 };
 
@@ -654,10 +663,24 @@ static int riscv_jim_configure(struct target *target,
 		return goi->is_configure
 			? jim_configure_ebreak(config, goi)
 			: jim_report_ebreak_config(config, goi->interp);
+	case RISCV_CFG_CETRIG:
+		if (goi->is_configure) {
+			struct jim_nvp *opt_nvp;
+			e = jim_getopt_nvp(goi, nvp_on_off_opts, &opt_nvp);
+			if (e != JIM_OK) {
+				jim_getopt_nvp_unknown(goi, nvp_on_off_opts, /*hadprefix*/ true);
+				return e;
+			}
+			config->dcsr_cetrig = opt_nvp->value;
+		} else {
+			Jim_SetResultString(goi->interp,
+				jim_nvp_value2name_simple(nvp_on_off_opts, config->dcsr_cetrig)->name, -1);
+		}
+		break;
 	default:
 		assert(false && "'jim_getopt_nvp' should have returned an error.");
 	}
-	return JIM_ERR;
+	return JIM_OK;
 }
 
 static int riscv_init_target(struct command_context *cmd_ctx,
@@ -2485,28 +2508,36 @@ static int riscv_examine(struct target *target)
 		LOG_TARGET_ERROR(target, "Could not read dtmcontrol. Check JTAG connectivity/board power.");
 		return ERROR_FAIL;
 	}
-	LOG_TARGET_DEBUG(target, "dtmcontrol=0x%x", dtmcontrol);
-	info->dtm_version = get_field(dtmcontrol, DTMCONTROL_VERSION);
-	LOG_TARGET_DEBUG(target, "version=0x%x", info->dtm_version);
+	LOG_TARGET_DEBUG(target, "dtmcontrol=0x%" PRIx32, dtmcontrol);
+	uint32_t dtm_version = get_field(dtmcontrol, DTMCONTROL_VERSION);
+	LOG_TARGET_DEBUG(target, "version=0x%" PRIx32, dtm_version);
 
-	int examine_status = ERROR_FAIL;
-	struct target_type *tt = get_target_type(target);
-	if (!tt)
-		goto examine_fail;
+	struct target_type *tt;
+	if (info->dtm_version == DTM_DTMCS_VERSION_UNKNOWN) {
+		info->dtm_version = dtm_version;
+		tt = get_target_type(target);
+		if (!tt) {
+			info->dtm_version = DTM_DTMCS_VERSION_UNKNOWN;
+			return ERROR_FAIL;
+		}
 
-	examine_status = tt->init_target(info->cmd_ctx, target);
-	if (examine_status != ERROR_OK)
-		goto examine_fail;
+		int retval = tt->init_target(info->cmd_ctx, target);
+		if (retval != ERROR_OK) {
+			info->dtm_version = DTM_DTMCS_VERSION_UNKNOWN;
+			return retval;
+		}
+	} else {
+		if (info->dtm_version != dtm_version) {
+			// REVISIT: could we deinit_target, change version and init_target again?
+			LOG_TARGET_ERROR(target, "dtmcs.version changed to 0x%" PRIx32, dtm_version);
+			return ERROR_FAIL;
+		}
+		tt = get_target_type(target);
+		if (!tt)
+			return ERROR_FAIL;
+	}
 
-	examine_status = tt->examine(target);
-	if (examine_status != ERROR_OK)
-		goto examine_fail;
-
-	return ERROR_OK;
-
-examine_fail:
-	info->dtm_version = DTM_DTMCS_VERSION_UNKNOWN;
-	return examine_status;
+	return tt->examine(target);
 }
 
 static int oldriscv_poll(struct target *target)
@@ -2621,6 +2652,9 @@ static int set_debug_reason(struct target *target, enum riscv_halt_reason halt_r
 		break;
 	case RISCV_HALT_SINGLESTEP:
 		target->debug_reason = DBG_REASON_SINGLESTEP;
+		break;
+	case RISCV_HALT_CRITICAL_ERROR:
+		target->debug_reason = DBG_REASON_EXC_CATCH;
 		break;
 	case RISCV_HALT_UNKNOWN:
 		target->debug_reason = DBG_REASON_UNDEFINED;
@@ -3565,11 +3599,7 @@ static int riscv_arch_state(struct target *target)
 			target_name(target),
 			debug_reason_name(target),
 			semihosting_active ? " Semihosting is active." : "");
-	struct target_type *tt = get_target_type(target);
-	if (!tt)
-		return ERROR_FAIL;
-	assert(tt->arch_state);
-	return tt->arch_state(target);
+	return ERROR_OK;
 }
 
 /* Algorithm must end with a software breakpoint instruction. */
@@ -3838,7 +3868,7 @@ static int riscv_poll_hart(struct target *target, enum riscv_next_action *next_a
 {
 	RISCV_INFO(r);
 
-	LOG_TARGET_DEBUG(target, "polling, target->state=%d", target->state);
+	LOG_TARGET_DEBUG_IO(target, "polling, target->state=%d", target->state);
 
 	*next_action = RPH_NONE;
 
@@ -4015,7 +4045,7 @@ exit:
 /*** OpenOCD Interface ***/
 int riscv_openocd_poll(struct target *target)
 {
-	LOG_TARGET_DEBUG(target, "Polling all harts.");
+	LOG_TARGET_DEBUG_IO(target, "Polling all harts.");
 
 	struct riscv_info *i = riscv_info(target);
 
@@ -4074,7 +4104,7 @@ int riscv_openocd_poll(struct target *target)
 		}
 	}
 
-	LOG_TARGET_DEBUG(target, "should_remain_halted=%d, should_resume=%d",
+	LOG_TARGET_DEBUG_IO(target, "should_remain_halted=%d, should_resume=%d",
 				should_remain_halted, should_resume);
 	if (should_remain_halted && should_resume) {
 		LOG_TARGET_WARNING(target, "%d harts should remain halted, and %d should resume.",
@@ -4324,21 +4354,42 @@ COMMAND_HANDLER(riscv_set_reset_timeout_sec)
 	return ERROR_OK;
 }
 
-COMMAND_HANDLER(riscv_set_mem_access)
+COMMAND_HANDLER(riscv_mem_access)
 {
 	struct target *target = get_current_target(CMD_CTX);
 	RISCV_INFO(r);
-	int progbuf_cnt = 0;
-	int sysbus_cnt = 0;
-	int abstract_cnt = 0;
 
-	if (CMD_ARGC < 1 || CMD_ARGC > RISCV_MEM_ACCESS_MAX_METHODS_NUM) {
-		command_print(CMD, "Command takes 1 to %d parameters",
-				RISCV_MEM_ACCESS_MAX_METHODS_NUM);
-		return ERROR_COMMAND_ARGUMENT_INVALID;
+	if (CMD_ARGC == 0) {
+		for (unsigned int i = 0; i < r->num_enabled_mem_access_methods; i++) {
+			if (i > 0)
+				command_print_sameline(CMD, " ");
+
+			switch (r->mem_access_methods[i]) {
+			case RISCV_MEM_ACCESS_PROGBUF:
+				command_print_sameline(CMD, "progbuf");
+				break;
+			case RISCV_MEM_ACCESS_SYSBUS:
+				command_print_sameline(CMD, "sysbus");
+				break;
+			case RISCV_MEM_ACCESS_ABSTRACT:
+				command_print_sameline(CMD, "abstract");
+				break;
+			default:
+				command_print(CMD, "BUG: invalid memory access type");
+				return ERROR_FAIL;
+			}
+		}
+		return ERROR_OK;
 	}
 
-	/* Check argument validity */
+	if (CMD_ARGC > RISCV_MEM_ACCESS_MAX_METHODS_NUM)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	unsigned int progbuf_cnt = 0;
+	unsigned int sysbus_cnt = 0;
+	unsigned int abstract_cnt = 0;
+
+	// Check argument validity.
 	for (unsigned int i = 0; i < CMD_ARGC; i++) {
 		if (strcmp("progbuf", CMD_ARGV[i]) == 0) {
 			progbuf_cnt++;
@@ -4347,17 +4398,17 @@ COMMAND_HANDLER(riscv_set_mem_access)
 		} else if (strcmp("abstract", CMD_ARGV[i]) == 0) {
 			abstract_cnt++;
 		} else {
-			LOG_ERROR("Unknown argument '%s'. "
-				"Must be one of: 'progbuf', 'sysbus' or 'abstract'.", CMD_ARGV[i]);
-			return ERROR_COMMAND_SYNTAX_ERROR;
+			command_print(CMD, "unknown method '%s', "
+				"must be one of: 'progbuf', 'sysbus' or 'abstract'", CMD_ARGV[i]);
+			return ERROR_COMMAND_ARGUMENT_INVALID;
 		}
 	}
 	if (progbuf_cnt > 1 || sysbus_cnt > 1 || abstract_cnt > 1) {
-		LOG_ERROR("Syntax error - duplicate arguments to `riscv set_mem_access`.");
-		return ERROR_COMMAND_SYNTAX_ERROR;
+		command_print(CMD, "duplicate memory access methods");
+		return ERROR_COMMAND_ARGUMENT_INVALID;
 	}
 
-	/* Args are valid, store them */
+	// Arguments are valid, store them.
 	r->num_enabled_mem_access_methods = CMD_ARGC;
 	for (unsigned int i = 0; i < CMD_ARGC; i++) {
 		if (strcmp("progbuf", CMD_ARGV[i]) == 0)
@@ -4368,19 +4419,28 @@ COMMAND_HANDLER(riscv_set_mem_access)
 			r->mem_access_methods[i] = RISCV_MEM_ACCESS_ABSTRACT;
 	}
 
-	/* Reset warning flags */
+	// Reset warning flags.
 	for (size_t i = 0; i < RISCV_MEM_ACCESS_MAX_METHODS_NUM; ++i)
 		r->mem_access_warn[i] = true;
 
 	return ERROR_OK;
 }
 
+COMMAND_HANDLER(riscv_set_mem_access)
+{
+	LOG_WARNING("DEPRECATED! use 'mem_access' not 'set_mem_access'");
+
+	if (CMD_ARGC == 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	return CALL_COMMAND_HANDLER(riscv_mem_access);
+}
 
 static bool parse_csr_address(const char *reg_address_str, unsigned int *reg_addr)
 {
 	*reg_addr = -1;
 	/* skip initial spaces */
-	while (isspace(reg_address_str[0]))
+	while (isspace((unsigned char)reg_address_str[0]))
 		++reg_address_str;
 	/* try to detect if string starts with 0x or 0X */
 	bool is_hex_address = strncmp(reg_address_str, "0x", 2) == 0 ||
@@ -5007,6 +5067,11 @@ COMMAND_HANDLER(riscv_itrigger)
 	struct target *target = get_current_target(CMD_CTX);
 	const int ITRIGGER_UNIQUE_ID = -CSR_TDATA1_TYPE_ITRIGGER;
 
+	if (!target_was_examined(target)) {
+		LOG_TARGET_ERROR(target, "not examined");
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
 	if (riscv_enumerate_triggers(target) != ERROR_OK)
 		return ERROR_FAIL;
 
@@ -5071,6 +5136,11 @@ COMMAND_HANDLER(riscv_icount)
 
 	struct target *target = get_current_target(CMD_CTX);
 	const int ICOUNT_UNIQUE_ID = -CSR_TDATA1_TYPE_ICOUNT;
+
+	if (!target_was_examined(target)) {
+		LOG_TARGET_ERROR(target, "not examined");
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
 
 	if (riscv_enumerate_triggers(target) != ERROR_OK)
 		return ERROR_FAIL;
@@ -5137,6 +5207,11 @@ COMMAND_HANDLER(riscv_etrigger)
 	struct target *target = get_current_target(CMD_CTX);
 	const int ETRIGGER_UNIQUE_ID = -CSR_TDATA1_TYPE_ETRIGGER;
 
+	if (!target_was_examined(target)) {
+		LOG_TARGET_ERROR(target, "not examined");
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
 	if (riscv_enumerate_triggers(target) != ERROR_OK)
 		return ERROR_FAIL;
 
@@ -5194,6 +5269,11 @@ COMMAND_HANDLER(riscv_etrigger)
 COMMAND_HANDLER(handle_repeat_read)
 {
 	struct target *target = get_current_target(CMD_CTX);
+	if (!target_was_examined(target)) {
+		LOG_TARGET_ERROR(target, "not examined");
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
 	RISCV_INFO(r);
 
 	if (CMD_ARGC < 2 || CMD_ARGC > 3)
@@ -5408,6 +5488,11 @@ COMMAND_HANDLER(riscv_exec_progbuf)
 
 	struct target *target = get_current_target(CMD_CTX);
 
+	if (!target_was_examined(target)) {
+		LOG_TARGET_ERROR(target, "not examined");
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
 	RISCV_INFO(r);
 	if (r->dtm_version != DTM_DTMCS_VERSION_1_0) {
 		LOG_TARGET_ERROR(target, "exec_progbuf: Program buffer is "
@@ -5514,6 +5599,11 @@ static COMMAND_HELPER(report_reserved_triggers, struct target *target)
 COMMAND_HANDLER(handle_reserve_trigger)
 {
 	struct target *target = get_current_target(CMD_CTX);
+	if (!target_was_examined(target)) {
+		command_print(CMD, "Error: Target not examined");
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
 	if (CMD_ARGC == 0)
 		return CALL_COMMAND_HANDLER(report_reserved_triggers, target);
 
@@ -5624,7 +5714,14 @@ static const struct command_registration riscv_exec_command_handlers[] = {
 		.handler = riscv_set_mem_access,
 		.mode = COMMAND_ANY,
 		.usage = "method1 [method2] [method3]",
-		.help = "Set which memory access methods shall be used and in which order "
+		.help = "DEPRECATED: Use 'riscv mem_access' instead."
+	},
+	{
+		.name = "mem_access",
+		.handler = riscv_mem_access,
+		.mode = COMMAND_ANY,
+		.usage = "[method1 [method2 [method3]]]",
+		.help = "Configure which memory access methods shall be used and in which order "
 			"of priority. Method can be one of: 'progbuf', 'sysbus' or 'abstract'."
 	},
 	{
@@ -5889,6 +5986,31 @@ static unsigned int riscv_data_bits(struct target *target)
 	return riscv_xlen(target);
 }
 
+static int riscv_insn_set(struct command_invocation *cmd,
+	struct target *target, const char **insn_set)
+{
+	if (!target_was_examined(target)) {
+		command_print(cmd, "[%s] target not examined yet", target_name(target));
+		return ERROR_TARGET_NOT_EXAMINED;
+	}
+
+	switch (riscv_xlen(target)) {
+	case 32:
+		*insn_set = "riscv32";
+		break;
+
+	case 64:
+		*insn_set = "riscv64";
+		break;
+
+	default:
+		command_print(cmd, "[%s] unsupported instruction set", target_name(target));
+		return ERROR_FAIL;
+	}
+
+	return ERROR_OK;
+}
+
 struct target_type riscv_target = {
 	.name = "riscv",
 
@@ -5936,7 +6058,9 @@ struct target_type riscv_target = {
 	.commands = riscv_command_handlers,
 
 	.address_bits = riscv_xlen_nonconst,
-	.data_bits = riscv_data_bits
+	.data_bits = riscv_data_bits,
+
+	.insn_set = riscv_insn_set,
 };
 
 /*** RISC-V Interface ***/
@@ -6275,6 +6399,15 @@ int riscv_enumerate_triggers(struct target *target)
 
 		if (disable_trigger_if_dmode(target, tdata1) != ERROR_OK)
 			return ERROR_FAIL;
+	}
+
+	if (t == ARRAY_SIZE(r->trigger_tinfo)) {
+		result = check_if_trigger_exists(target, t);
+		if (result == ERROR_FAIL)
+			return ERROR_FAIL;
+		if (result == ERROR_OK)
+			LOG_TARGET_WARNING(target, "Target has more than %zu triggers; ignoring remaining triggers",
+					ARRAY_SIZE(r->trigger_tinfo));
 	}
 
 	if (riscv_reg_set(target, GDB_REGNO_TSELECT, orig_tselect) != ERROR_OK)

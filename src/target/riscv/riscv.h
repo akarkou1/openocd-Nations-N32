@@ -17,9 +17,7 @@ struct riscv_program;
 
 #define RISCV_COMMON_MAGIC	0x52495356U
 
-#define RISCV_MAX_HARTS  ((int)BIT(20))
 #define RISCV_MAX_TRIGGERS 32
-#define RISCV_MAX_HWBPS 16
 #define RISCV_MAX_DMS 100
 
 #define DEFAULT_COMMAND_TIMEOUT_SEC 5
@@ -75,6 +73,7 @@ enum riscv_halt_reason {
 	RISCV_HALT_TRIGGER,
 	RISCV_HALT_UNKNOWN,
 	RISCV_HALT_GROUP,
+	RISCV_HALT_CRITICAL_ERROR,
 	RISCV_HALT_ERROR
 };
 
@@ -216,7 +215,7 @@ struct riscv_info {
 	 * >= 0: unique_id of the breakpoint/watchpoint that is using it.
 	 * Note that in RTOS mode the triggers are the same across all harts the
 	 * target controls, while otherwise only a single hart is controlled. */
-	int64_t trigger_unique_id[RISCV_MAX_HWBPS];
+	int64_t trigger_unique_id[RISCV_MAX_TRIGGERS];
 
 	/* The unique id of the trigger that caused the most recent halt. If the
 	 * most recent halt was not caused by a trigger, then this is -1. */
@@ -378,6 +377,7 @@ enum riscv_priv_mode {
 
 struct riscv_private_config {
 	bool dcsr_ebreak_fields[N_RISCV_MODE];
+	bool dcsr_cetrig;
 };
 
 static inline struct riscv_private_config

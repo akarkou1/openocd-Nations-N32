@@ -115,8 +115,6 @@ struct jtag_event_callback {
 /* callbacks to inform high-level handlers about JTAG state changes */
 static struct jtag_event_callback *jtag_event_callbacks;
 
-extern struct adapter_driver *adapter_driver;
-
 void jtag_set_flush_queue_sleep(int ms)
 {
 	jtag_flush_queue_sleep = ms;
@@ -148,19 +146,16 @@ static bool jtag_poll_en = true;
 bool is_jtag_poll_safe(void)
 {
 	/* Polling can be disabled explicitly with set_enabled(false).
-	 * It can also be masked with mask().
-	 * It is also implicitly disabled while TRST is active and
-	 * while SRST is gating the JTAG clock.
-	 */
-	if (!jtag_poll_en)
+	 * It can also be masked with mask(). */
+	if (!jtag_poll_en || !jtag_poll)
 		return false;
 
-	if (!transport_is_jtag())
-		return jtag_poll;
-
-	if (!jtag_poll || jtag_trst != 0)
+	/* On JTAG transport it is also implicitly disabled while TRST is active */
+	if (transport_is_jtag() && jtag_trst == 1)
 		return false;
-	return jtag_srst == 0 || (jtag_reset_config & RESET_SRST_NO_GATING);
+
+	/* On any transport while SRST is gating the JTAG clock or other debug HW */
+	return jtag_srst != 1 || (jtag_reset_config & RESET_SRST_NO_GATING);
 }
 
 bool jtag_poll_get_enabled(void)
@@ -251,21 +246,7 @@ struct jtag_tap *jtag_tap_by_string(const char *s)
 		t = t->next_tap;
 	}
 
-	/* no tap found by name, so try to parse the name as a number */
-	unsigned int n;
-	if (parse_uint(s, &n) != ERROR_OK)
-		return NULL;
-
-	/* FIXME remove this numeric fallback code late June 2010, along
-	 * with all info in the User's Guide that TAPs have numeric IDs.
-	 * Also update "scan_chain" output to not display the numbers.
-	 */
-	t = jtag_tap_by_position(n);
-	if (t)
-		LOG_WARNING("Specify TAP '%s' by name, not number %u",
-			t->dotted_name, n);
-
-	return t;
+	return NULL;
 }
 
 struct jtag_tap *jtag_tap_next_enabled(struct jtag_tap *p)
@@ -524,6 +505,10 @@ void jtag_add_pathmove(unsigned int num_states, const enum tap_state *path)
 {
 	enum tap_state cur_state = cmd_queue_cur_state;
 
+	// quit if there is nothing to do
+	if (num_states == 0)
+		return;
+
 	/* the last state has to be a stable state */
 	if (!tap_is_state_stable(path[num_states - 1])) {
 		LOG_ERROR("BUG: TAP path doesn't finish in a stable state");
@@ -538,8 +523,7 @@ void jtag_add_pathmove(unsigned int num_states, const enum tap_state *path)
 			return;
 		}
 
-		if (tap_state_transition(cur_state, true) != path[i] &&
-				tap_state_transition(cur_state, false) != path[i]) {
+		if (!tap_is_state_next(cur_state, path[i])) {
 			LOG_ERROR("BUG: %s -> %s isn't a valid TAP transition",
 				tap_state_name(cur_state), tap_state_name(path[i]));
 			jtag_set_error(ERROR_JTAG_TRANSITION_INVALID);
@@ -586,8 +570,7 @@ int jtag_add_statemove(enum tap_state goal_state)
 		}
 
 		jtag_add_pathmove(tms_count, moves);
-	} else if (tap_state_transition(cur_state, true)  == goal_state
-			|| tap_state_transition(cur_state, false) == goal_state)
+	} else if (tap_is_state_next(cur_state, goal_state))
 		jtag_add_pathmove(1, &goal_state);
 	else
 		return ERROR_FAIL;

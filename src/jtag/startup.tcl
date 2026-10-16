@@ -241,6 +241,13 @@ proc  interface_list args {
 	eval adapter list $args
 }
 
+lappend _telnet_autocomplete_skip "espusbjtag vid_pid"
+proc "espusbjtag vid_pid" args {
+	echo "DEPRECATED! use 'adapter usb vid_pid' not 'espusbjtag vid_pid'"
+	eval adapter usb vid_pid $args
+}
+
+
 lappend _telnet_autocomplete_skip ftdi_location
 proc ftdi_location args {
 	echo "DEPRECATED! use 'adapter usb location' not 'ftdi_location'"
@@ -269,10 +276,16 @@ proc "hla newtap" {args} {
 	eval swj_newdap $args
 }
 
+lappend _telnet_autocomplete_skip "ftdi device_desc"
+proc "ftdi device_desc" args {
+	echo "DEPRECATED! use 'adapter usb product_name' not 'ftdi device_desc'"
+	eval adapter usb product_name $args
+}
+
 lappend _telnet_autocomplete_skip ftdi_device_desc
 proc ftdi_device_desc args {
-	echo "DEPRECATED! use 'ftdi device_desc' not 'ftdi_device_desc'"
-	eval ftdi device_desc $args
+	echo "DEPRECATED! use 'adapter usb product_name' not 'ftdi_device_desc'"
+	eval adapter usb product_name $args
 }
 
 lappend _telnet_autocomplete_skip ftdi_serial
@@ -313,8 +326,14 @@ proc ftdi_get_signal args {
 
 lappend _telnet_autocomplete_skip ftdi_vid_pid
 proc ftdi_vid_pid args {
-	echo "DEPRECATED! use 'ftdi vid_pid' not 'ftdi_vid_pid'"
-	eval ftdi vid_pid $args
+	echo "DEPRECATED! use 'adapter usb vid_pid' not 'ftdi_vid_pid'"
+	eval adapter usb vid_pid $args
+}
+
+lappend _telnet_autocomplete_skip "ftdi vid_pid"
+proc "ftdi vid_pid" args {
+	echo "DEPRECATED! use 'adapter usb vid_pid' not 'ftdi vid_pid'"
+	eval adapter usb vid_pid $args
 }
 
 lappend _telnet_autocomplete_skip ftdi_tdo_sample_edge
@@ -336,9 +355,15 @@ proc remote_bitbang_port args {
 }
 
 lappend _telnet_autocomplete_skip openjtag_device_desc
+proc "openjtag device_desc" args {
+	echo "DEPRECATED! use 'adapter usb product_name' not 'openjtag device_desc'"
+	eval adapter usb product_name $args
+}
+
+lappend _telnet_autocomplete_skip openjtag_device_desc
 proc openjtag_device_desc args {
-	echo "DEPRECATED! use 'openjtag device_desc' not 'openjtag_device_desc'"
-	eval openjtag device_desc $args
+	echo "DEPRECATED! use 'adapter usb product_name' not 'openjtag_device_desc'"
+	eval adapter usb product_name $args
 }
 
 lappend _telnet_autocomplete_skip openjtag_variant
@@ -802,16 +827,16 @@ proc buspirate_port args {
 	eval buspirate port $args
 }
 
-lappend _telnet_autocomplete_skip usb_blaster_device_desc
-proc usb_blaster_device_desc args {
-	echo "DEPRECATED! use 'usb_blaster device_desc' not 'usb_blaster_device_desc'"
-	eval usb_blaster device_desc $args
-}
-
 lappend _telnet_autocomplete_skip usb_blaster_vid_pid
 proc usb_blaster_vid_pid args {
-	echo "DEPRECATED! use 'usb_blaster vid_pid' not 'usb_blaster_vid_pid'"
-	eval usb_blaster vid_pid $args
+	echo "DEPRECATED! use 'adapter usb vid_pid' not 'usb_blaster_vid_pid'"
+	eval adapter usb vid_pid $args
+}
+
+lappend _telnet_autocomplete_skip "usb_blaster vid_pid"
+proc "usb_blaster vid_pid" args {
+	echo "DEPRECATED! use 'adapter usb vid_pid' not 'usb_blaster vid_pid'"
+	eval adapter usb vid_pid $args
 }
 
 lappend _telnet_autocomplete_skip usb_blaster_lowlevel_driver
@@ -840,8 +865,14 @@ proc ft232r_serial_desc args {
 
 lappend _telnet_autocomplete_skip ft232r_vid_pid
 proc ft232r_vid_pid args {
-	echo "DEPRECATED! use 'ft232r vid_pid' not 'ft232r_vid_pid'"
-	eval ft232r vid_pid $args
+	echo "DEPRECATED! use 'adapter usb vid_pid' not 'ft232r_vid_pid'"
+	eval adapter usb vid_pid $args
+}
+
+lappend _telnet_autocomplete_skip "ft232r vid_pid"
+proc "ft232r vid_pid" args {
+	echo "DEPRECATED! use 'adapter usb vid_pid' not 'ft232r vid_pid'"
+	eval adapter usb vid_pid $args
 }
 
 lappend _telnet_autocomplete_skip ft232r_jtag_nums
@@ -1143,8 +1174,8 @@ proc "cmsis_dap_backend" {backend} {
 
 lappend _telnet_autocomplete_skip "cmsis_dap_vid_pid"
 proc "cmsis_dap_vid_pid" {args} {
-	echo "DEPRECATED! use 'cmsis-dap vid_pid', not 'cmsis_dap_vid_pid'"
-	eval cmsis-dap vid_pid $args
+	echo "DEPRECATED! use 'adapter usb vid_pid', not 'cmsis_dap_vid_pid'"
+	eval adapter usb vid_pid $args
 }
 
 lappend _telnet_autocomplete_skip "cmsis_dap_usb"
@@ -1167,8 +1198,8 @@ proc "hla_device_desc" {desc} {
 
 lappend _telnet_autocomplete_skip "hla_vid_pid"
 proc "hla_vid_pid" {args} {
-	echo "DEPRECATED! use 'hla vid_pid', not 'hla_vid_pid'"
-	eval hla vid_pid $args
+	echo "DEPRECATED! use 'adapter usb vid_pid', not 'hla_vid_pid'"
+	eval adapter usb vid_pid $args
 }
 
 lappend _telnet_autocomplete_skip "hla_command"
@@ -1183,6 +1214,12 @@ proc "hla_stlink_backend" {args} {
 	eval hla stlink_backend $args
 }
 
+lappend _telnet_autocomplete_skip "st-link vid_pid"
+proc "st-link vid_pid" {args} {
+	echo "DEPRECATED! use 'adapter usb vid_pid', not 'st-link vid_pid'"
+    eval adapter usb vid_pid $args
+}
+
 lappend _telnet_autocomplete_skip "kitprog_init_acquire_psoc"
 proc "kitprog_init_acquire_psoc" {} {
 	echo "DEPRECATED! use 'kitprog init_acquire_psoc', not 'kitprog_init_acquire_psoc'"
@@ -1194,12 +1231,12 @@ proc "pld device" {driver tap_name {opt 0}} {
 	echo "DEPRECATED! use 'pld create ...', not 'pld device ...'"
 	if {[string is integer -strict $opt]} {
 		if {$opt == 0} {
-			eval pld create [lindex [split $tap_name .] 0].pld $driver -chain-position $tap_name
+			eval pld create [lindex [split $tap_name .] 0].pld $driver -tap $tap_name
 		} else {
-			eval pld create [lindex [split $tap_name .] 0].pld $driver -chain-position $tap_name -no_jstart
+			eval pld create [lindex [split $tap_name .] 0].pld $driver -tap $tap_name -no_jstart
 		}
 	} else {
-		eval pld create [lindex [split $tap_name .] 0].pld $driver -chain-position $tap_name -family $opt
+		eval pld create [lindex [split $tap_name .] 0].pld $driver -tap $tap_name -family $opt
 	}
 }
 

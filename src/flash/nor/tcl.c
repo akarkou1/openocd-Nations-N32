@@ -187,10 +187,13 @@ COMMAND_HANDLER(handle_flash_erase_check_command)
 	if (retval != ERROR_OK)
 		return retval;
 
-	retval = p->driver->erase_check(p);
-	if (retval == ERROR_OK)
+	if (p->driver->erase_check)
+		retval = p->driver->erase_check(p);
+	else
+		retval = default_flash_blank_check(p);
+	if (retval == ERROR_OK) {
 		command_print(CMD, "successfully checked erase state");
-	else {
+	} else {
 		command_print(CMD,
 			"Error: checking erase state of flash bank #%s at "
 			TARGET_ADDR_FMT,
@@ -217,6 +220,9 @@ COMMAND_HANDLER(handle_flash_erase_check_command)
 			p->sectors[j].size >> 10,
 			erase_state);
 	}
+
+	if (p->num_sectors == 0)
+		blank = (p->is_erased == 1);
 
 	if (blank)
 		command_print(CMD, "\tBank is erased");
@@ -273,15 +279,24 @@ COMMAND_HANDLER(handle_flash_erase_address_command)
 		retval = flash_unlock_address_range(target, address, length);
 
 	if (retval == ERROR_OK)
-		retval = flash_erase_address_range(target, do_pad, address, length);
+		retval = flash_erase_address_range(target, do_pad, address, length,
+										false /* skip_banks_without_erase */);
 
-	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+	if (retval == ERROR_FLASH_OPER_UNSUPPORTED) {
+		command_print(CMD, "erase operation is not supported");
+		return retval;
+	} else if (retval != ERROR_OK) {
+		command_print(CMD, "erase operation failed");
+		return retval;
+	}
+
+	if (duration_measure(&bench) == ERROR_OK) {
 		command_print(CMD, "erased address " TARGET_ADDR_FMT " (length %" PRIu32 ")"
 			" in %fs (%0.3f KiB/s)", address, length,
 			duration_elapsed(&bench), duration_kbps(&bench, length));
 	}
 
-	return retval;
+	return ERROR_OK;
 }
 
 COMMAND_HANDLER(handle_flash_erase_command)
@@ -299,23 +314,29 @@ COMMAND_HANDLER(handle_flash_erase_command)
 	if (retval != ERROR_OK)
 		return retval;
 
-	COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], first);
-	if (strcmp(CMD_ARGV[2], "last") == 0)
-		last = p->num_sectors - 1;
-	else
-		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], last);
+	if (p->num_sectors == 0) {
+		LOG_INFO("bank has no sectors, ignoring specified sectors");
+		first = 0;
+		last = 0;
+	} else {
+		COMMAND_PARSE_NUMBER(u32, CMD_ARGV[1], first);
+		if (strcmp(CMD_ARGV[2], "last") == 0)
+			last = p->num_sectors - 1;
+		else
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[2], last);
 
-	if (!(first <= last)) {
-		command_print(CMD, "ERROR: "
-			"first sector must be <= last");
-		return ERROR_FAIL;
-	}
+		if (!(first <= last)) {
+			command_print(CMD, "ERROR: "
+				"first sector must be <= last");
+			return ERROR_FAIL;
+		}
 
-	if (!(last <= (p->num_sectors - 1))) {
-		command_print(CMD, "ERROR: "
-			"last sector must be <= %u",
-			p->num_sectors - 1);
-		return ERROR_FAIL;
+		if (!(last <= (p->num_sectors - 1))) {
+			command_print(CMD, "ERROR: "
+				"last sector must be <= %u",
+				p->num_sectors - 1);
+			return ERROR_FAIL;
+		}
 	}
 
 	struct duration bench;
@@ -323,13 +344,21 @@ COMMAND_HANDLER(handle_flash_erase_command)
 
 	retval = flash_driver_erase(p, first, last);
 
-	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+	if (retval == ERROR_FLASH_OPER_UNSUPPORTED) {
+		command_print(CMD, "erase operation is not supported");
+		return retval;
+	} else if (retval != ERROR_OK) {
+		command_print(CMD, "failed to erase sectors");
+		return retval;
+	}
+
+	if (duration_measure(&bench) == ERROR_OK) {
 		command_print(CMD, "erased sectors %" PRIu32 " "
 			"through %" PRIu32 " on flash bank %u "
 			"in %fs", first, last, p->bank_number, duration_elapsed(&bench));
 	}
 
-	return retval;
+	return ERROR_OK;
 }
 
 COMMAND_HANDLER(handle_flash_protect_command)
@@ -378,15 +407,18 @@ COMMAND_HANDLER(handle_flash_protect_command)
 	}
 
 	retval = flash_driver_protect(p, set, first, last);
-	if (retval == ERROR_OK) {
-		command_print(CMD, "%s protection for %s %" PRIu32
-			" through %" PRIu32 " on flash bank %d",
-			(set) ? "set" : "cleared",
-			(p->num_prot_blocks) ? "blocks" : "sectors",
-			first, last, p->bank_number);
+	if (retval != ERROR_OK) {
+		command_print(CMD, "failed to %s protection", set ? "set" : "clear");
+		return retval;
 	}
 
-	return retval;
+	command_print(CMD, "%s protection for %s %" PRIu32
+		" through %" PRIu32 " on flash bank %d",
+		set ? "set" : "cleared",
+		p->num_prot_blocks ? "blocks" : "sectors",
+		first, last, p->bank_number);
+
+	return ERROR_OK;
 }
 
 COMMAND_HANDLER(handle_flash_write_image_command)
@@ -449,7 +481,7 @@ COMMAND_HANDLER(handle_flash_write_image_command)
 		return retval;
 	}
 
-	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+	if (retval == ERROR_OK && duration_measure(&bench) == ERROR_OK) {
 		command_print(CMD, "wrote %" PRIu32 " bytes from file %s "
 			"in %fs (%0.3f KiB/s)", written, CMD_ARGV[0],
 			duration_elapsed(&bench), duration_kbps(&bench, written));
@@ -501,7 +533,7 @@ COMMAND_HANDLER(handle_flash_verify_image_command)
 		return retval;
 	}
 
-	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+	if (retval == ERROR_OK && duration_measure(&bench) == ERROR_OK) {
 		command_print(CMD, "verified %" PRIu32 " bytes from file %s "
 			"in %fs (%0.3f KiB/s)", verified, CMD_ARGV[0],
 			duration_elapsed(&bench), duration_kbps(&bench, verified));
@@ -606,7 +638,8 @@ COMMAND_HANDLER(handle_flash_fill_command)
 		break;
 	default:
 		LOG_ERROR("BUG: can't happen");
-		exit(-1);
+		retval = ERROR_FAIL;
+		goto done;
 	}
 
 	if (padding_at_end) {
@@ -655,7 +688,7 @@ COMMAND_HANDLER(handle_flash_fill_command)
 		ptr += wordsize;
 	}
 
-	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+	if (retval == ERROR_OK && duration_measure(&bench) == ERROR_OK) {
 		command_print(CMD, "wrote %" PRIu32 " bytes to " TARGET_ADDR_FMT
 			" in %fs (%0.3f KiB/s)", size_bytes, address,
 			duration_elapsed(&bench), duration_kbps(&bench, size_bytes));
@@ -950,7 +983,7 @@ COMMAND_HANDLER(handle_flash_write_bank_command)
 
 	free(buffer);
 
-	if ((retval == ERROR_OK) && (duration_measure(&bench) == ERROR_OK)) {
+	if (retval == ERROR_OK && duration_measure(&bench) == ERROR_OK) {
 		command_print(CMD, "wrote %zu bytes from file %s to flash bank %u"
 			" at offset 0x%8.8" PRIx32 " in %fs (%0.3f KiB/s)",
 			length, CMD_ARGV[1], bank->bank_number, offset,
@@ -1442,8 +1475,7 @@ COMMAND_HANDLER(handle_flash_banks_command)
 	if (CMD_ARGC != 0)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 
-	unsigned int n = 0;
-	for (struct flash_bank *p = flash_bank_list(); p; p = p->next, n++) {
+	for (struct flash_bank *p = flash_bank_list(); p; p = p->next) {
 		command_print(CMD, "#%d : %s (%s) at " TARGET_ADDR_FMT ", size 0x%8.8" PRIx32 ", "
 			"buswidth %u, chipwidth %u", p->bank_number,
 			p->name, p->driver->name, p->base, p->size,

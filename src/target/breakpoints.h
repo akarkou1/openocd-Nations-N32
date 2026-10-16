@@ -11,6 +11,8 @@
 #include <stdint.h>
 
 #include "helper/types.h"
+#include "helper/command.h"
+#include "image.h"
 
 struct target;
 
@@ -68,6 +70,9 @@ static inline void breakpoint_hw_set(struct breakpoint *breakpoint, unsigned int
 	breakpoint->number = hw_number;
 }
 
+COMMAND_HELPER(detect_breakpoints_in_section, struct target *target,
+		struct imagesection section);
+
 int watchpoint_add(struct target *target,
 		target_addr_t address, unsigned int length,
 		enum watchpoint_rw rw, uint64_t value, uint64_t mask);
@@ -86,5 +91,7 @@ static inline void watchpoint_set(struct watchpoint *watchpoint, unsigned int nu
 
 #define ERROR_BREAKPOINT_NOT_FOUND (-1600)
 #define ERROR_WATCHPOINT_NOT_FOUND (-1601)
+#define ERROR_BREAKPOINT_DUPLICATED (-1602)
+#define ERROR_BREAKPOINT_OVERLAPPED (-1603)
 
 #endif /* OPENOCD_TARGET_BREAKPOINTS_H */

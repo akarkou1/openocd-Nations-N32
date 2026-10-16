@@ -111,6 +111,9 @@ endif
 if ESP_USB_JTAG
 DRIVERFILES += %D%/esp_usb_jtag.c
 endif
+if EUD
+DRIVERFILES += %D%/eud.c
+endif
 if USBPROG
 DRIVERFILES += %D%/usbprog.c
 endif
@@ -212,6 +215,12 @@ DRIVERFILES += %D%/am335xgpio.c
 endif
 if CH347
 DRIVERFILES += %D%/ch347.c
+endif
+if CKLINK
+DRIVERFILES += %D%/cklink.c
+endif
+if XVC
+DRIVERFILES += %D%/xvc.c
 endif
 
 DRIVERHEADERS = \

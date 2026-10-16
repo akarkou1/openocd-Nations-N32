@@ -199,9 +199,7 @@ static int msp432_exec_cmd(struct target *target, struct msp432_algo_params
 		return retval;
 
 	/* Write out command to target memory */
-	retval = target_write_u32(target, ALGO_FLASH_COMMAND_ADDR, command);
-
-	return retval;
+	return target_write_u32(target, ALGO_FLASH_COMMAND_ADDR, command);
 }
 
 static int msp432_wait_return_code(struct target *target)
@@ -393,9 +391,7 @@ static int msp432_init(struct flash_bank *bank)
 	if (retval != ERROR_OK)
 		return retval;
 
-	retval = msp432_wait_return_code(target);
-
-	return retval;
+	return msp432_wait_return_code(target);
 }
 
 static int msp432_quit(struct flash_bank *bank)
@@ -1022,12 +1018,6 @@ static int msp432_info(struct flash_bank *bank, struct command_invocation *cmd)
 	return ERROR_OK;
 }
 
-static int msp432_protect_check(struct flash_bank *bank)
-{
-	/* Added to suppress warning, not needed for MSP432 flash */
-	return ERROR_OK;
-}
-
 static void msp432_flash_free_driver_priv(struct flash_bank *bank)
 {
 	bool is_main = bank->base == FLASH_BASE;
@@ -1080,7 +1070,6 @@ const struct flash_driver msp432_flash = {
 	.probe = msp432_probe,
 	.auto_probe = msp432_auto_probe,
 	.erase_check = default_flash_blank_check,
-	.protect_check = msp432_protect_check,
 	.info = msp432_info,
 	.free_driver_priv = msp432_flash_free_driver_priv,
 };
